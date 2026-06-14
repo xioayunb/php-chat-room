@@ -381,32 +381,38 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PHP 聊天室</title>
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Work+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <title>Nebula Chat</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-void: #05050d;
-            --bg-deep: #0a0a18;
-            --bg-surface: rgba(255,255,255,0.02);
-            --bg-glass: rgba(18,18,42,0.65);
-            --accent-blue: #4dabf7;
-            --accent-blue-dim: rgba(77,171,247,0.15);
-            --accent-amber: #ffb347;
-            --accent-amber-dim: rgba(255,179,71,0.12);
-            --accent-rose: #f06595;
-            --text-primary: #e9ecef;
-            --text-secondary: #868e96;
-            --text-muted: #495057;
-            --border-glass: rgba(255,255,255,0.06);
-            --border-active: rgba(77,171,247,0.35);
-            --font-display: 'Syne', sans-serif;
-            --font-body: 'Work Sans', sans-serif;
+            --void: #02040a;
+            --abyss: #060b16;
+            --surface: rgba(255,255,255,0.02);
+            --glass: rgba(8,12,24,0.7);
+            --glass-hover: rgba(12,18,36,0.85);
+            --neon-cyan: #00e5ff;
+            --neon-cyan-dim: rgba(0,229,255,0.1);
+            --neon-cyan-glow: rgba(0,229,255,0.25);
+            --neon-magenta: #ff2d95;
+            --neon-magenta-dim: rgba(255,45,149,0.1);
+            --neon-magenta-glow: rgba(255,45,149,0.25);
+            --neon-green: #39ff14;
+            --neon-green-dim: rgba(57,255,20,0.08);
+            --text-primary: #e8ecf1;
+            --text-secondary: #8892a4;
+            --text-muted: #4a5568;
+            --border-subtle: rgba(255,255,255,0.04);
+            --border-glass: rgba(255,255,255,0.07);
+            --border-neon: rgba(0,229,255,0.3);
+            --font-display: 'Sora', sans-serif;
+            --font-body: 'DM Sans', sans-serif;
             --font-mono: 'JetBrains Mono', monospace;
-            --radius-xs: 6px;
-            --radius-sm: 10px;
-            --radius-md: 16px;
-            --radius-lg: 24px;
-            --radius-xl: 32px;
+            --radius-sm: 8px;
+            --radius-md: 14px;
+            --radius-lg: 22px;
+            --radius-xl: 28px;
+            --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+            --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -414,7 +420,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         body {
             font-family: var(--font-body);
             font-weight: 400;
-            background: var(--bg-void);
+            background: var(--void);
             color: var(--text-primary);
             height: 100vh;
             display: flex;
@@ -423,40 +429,89 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             overflow: hidden;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
+            cursor: crosshair;
         }
 
-        /* Ambient background mesh */
-        body::before {
-            content: '';
+        /* Animated liquid gradient blobs */
+        .bg-blobs {
             position: fixed;
             inset: 0;
-            background:
-                radial-gradient(ellipse 80% 60% at 15% 10%, rgba(77,171,247,0.06) 0%, transparent 55%),
-                radial-gradient(ellipse 60% 80% at 85% 90%, rgba(255,179,71,0.05) 0%, transparent 55%),
-                radial-gradient(ellipse 50% 50% at 50% 50%, rgba(240,101,149,0.03) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+        .bg-blobs .blob {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.35;
+            animation-timing-function: ease-in-out;
+            animation-iteration-count: infinite;
+        }
+        .blob-1 {
+            width: 700px; height: 700px;
+            background: radial-gradient(circle, var(--neon-cyan) 0%, transparent 70%);
+            top: -15%; left: -10%;
+            animation: blobFloat1 18s infinite;
+        }
+        .blob-2 {
+            width: 600px; height: 600px;
+            background: radial-gradient(circle, var(--neon-magenta) 0%, transparent 70%);
+            bottom: -20%; right: -8%;
+            animation: blobFloat2 22s infinite;
+        }
+        .blob-3 {
+            width: 500px; height: 500px;
+            background: radial-gradient(circle, var(--neon-green) 0%, transparent 70%);
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            animation: blobFloat3 20s infinite;
+        }
+        @keyframes blobFloat1 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(120px, -60px) scale(1.15); }
+            50% { transform: translate(-40px, 80px) scale(0.9); }
+            75% { transform: translate(-100px, -30px) scale(1.1); }
+        }
+        @keyframes blobFloat2 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(-80px, 40px) scale(1.2); }
+            66% { transform: translate(60px, -70px) scale(0.85); }
+        }
+        @keyframes blobFloat3 {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.3) rotate(15deg); }
+        }
+
+        /* Noise grain overlay */
+        .grain {
+            position: fixed; inset: 0;
+            opacity: 0.025;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 300 300' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            background-size: 180px 180px;
             pointer-events: none;
             z-index: 0;
         }
 
-        /* Subtle noise grain */
-        body::after {
-            content: '';
+        /* Cursor trail */
+        .cursor-trail {
             position: fixed;
-            inset: 0;
-            opacity: 0.03;
-            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-            background-size: 200px 200px;
             pointer-events: none;
-            z-index: 0;
+            z-index: 9999;
+            width: 180px; height: 180px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(0,229,255,0.06) 0%, transparent 70%);
+            transform: translate(-50%, -50%);
+            transition: left 0.4s linear, top 0.4s linear;
         }
 
         .chat-container {
             width: 100%;
-            max-width: 1040px;
+            max-width: 1060px;
             height: 94vh;
-            background: var(--bg-glass);
-            backdrop-filter: blur(60px) saturate(140%);
-            -webkit-backdrop-filter: blur(60px) saturate(140%);
+            background: var(--glass);
+            backdrop-filter: blur(80px) saturate(160%);
+            -webkit-backdrop-filter: blur(80px) saturate(160%);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius-xl);
             display: flex;
@@ -465,80 +520,128 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             position: relative;
             z-index: 1;
             box-shadow:
-                0 0 0 1px rgba(255,255,255,0.03) inset,
-                0 30px 100px rgba(0,0,0,0.5),
-                0 0 120px rgba(77,171,247,0.04);
+                0 0 0 1px rgba(255,255,255,0.02) inset,
+                0 40px 120px rgba(0,0,0,0.6),
+                0 0 80px rgba(0,229,255,0.03),
+                0 0 40px rgba(255,45,149,0.02);
+            transition: border-color 0.5s ease;
+        }
+        .chat-container:hover {
+            border-color: rgba(0,229,255,0.12);
         }
 
         .chat-header {
-            padding: 18px 28px;
+            padding: 20px 32px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--border-glass);
-            background: rgba(10,10,24,0.5);
+            background: rgba(6,11,22,0.6);
             flex-shrink: 0;
+            position: relative;
+        }
+        .chat-header::after {
+            content: '';
+            position: absolute;
+            bottom: -1px; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--neon-cyan), var(--neon-magenta), transparent);
+            opacity: 0.3;
+            animation: headerLine 4s ease-in-out infinite;
+        }
+        @keyframes headerLine {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 0.5; }
         }
 
         .chat-header .brand {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
         }
-
         .chat-header .brand-logo {
-            width: 36px;
-            height: 36px;
+            width: 40px; height: 40px;
             border-radius: var(--radius-sm);
-            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-rose) 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            background: linear-gradient(135deg, var(--neon-cyan) 0%, var(--neon-magenta) 100%);
+            display: flex; align-items: center; justify-content: center;
             font-size: 1.1em;
-            box-shadow: 0 0 20px rgba(77,171,247,0.3);
+            position: relative;
+            box-shadow: 0 0 24px var(--neon-cyan-glow);
         }
-
+        .chat-header .brand-logo::after {
+            content: '';
+            position: absolute; inset: -3px;
+            border-radius: 11px;
+            background: linear-gradient(135deg, var(--neon-cyan), var(--neon-magenta));
+            z-index: -1;
+            opacity: 0.4;
+            filter: blur(8px);
+            animation: logoPulse 3s ease-in-out infinite;
+        }
+        @keyframes logoPulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.6; }
+        }
         .chat-header h1 {
             font-family: var(--font-display);
-            font-size: 1.25em;
+            font-size: 1.3em;
             font-weight: 800;
-            letter-spacing: -0.02em;
-            color: var(--text-primary);
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--neon-cyan) 50%, var(--text-primary) 100%);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: titleShine 4s ease-in-out infinite;
         }
-
+        @keyframes titleShine {
+            0%, 100% { background-position: 0% center; }
+            50% { background-position: 200% center; }
+        }
         .online-count {
             font-family: var(--font-mono);
-            font-size: 0.78em;
-            color: var(--accent-blue);
-            margin-top: 1px;
-            font-weight: 400;
+            font-size: 0.72em;
+            font-weight: 500;
+            color: var(--neon-cyan);
+            margin-top: 2px;
+            letter-spacing: 0.05em;
         }
 
         .header-actions {
             display: flex;
-            gap: 8px;
+            gap: 10px;
         }
-
         .btn-ghost {
             background: transparent;
             border: 1px solid var(--border-glass);
             color: var(--text-secondary);
-            padding: 8px 16px;
+            padding: 9px 18px;
             border-radius: 9999px;
             cursor: pointer;
-            font-size: 0.8em;
+            font-size: 0.78em;
             font-family: var(--font-body);
             font-weight: 500;
-            letter-spacing: 0.01em;
-            transition: all 0.25s ease;
+            letter-spacing: 0.02em;
+            transition: all 0.3s var(--ease-out-expo);
             white-space: nowrap;
+            position: relative;
+            overflow: hidden;
         }
-
+        .btn-ghost::before {
+            content: '';
+            position: absolute; inset: 0;
+            background: linear-gradient(135deg, var(--neon-cyan-dim), var(--neon-magenta-dim));
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
         .btn-ghost:hover {
-            background: rgba(77,171,247,0.1);
-            border-color: var(--border-active);
-            color: var(--accent-blue);
-            box-shadow: 0 0 16px rgba(77,171,247,0.12);
+            border-color: var(--border-neon);
+            color: var(--neon-cyan);
+            box-shadow: 0 0 20px var(--neon-cyan-dim);
+            transform: translateY(-1px);
+        }
+        .btn-ghost:hover::before {
+            opacity: 1;
         }
 
         .chat-body {
@@ -547,7 +650,6 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             overflow: hidden;
             min-height: 0;
         }
-
         .messages-area {
             flex: 1;
             display: flex;
@@ -559,485 +661,512 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         .messages-list {
             flex: 1;
             overflow-y: auto;
-            padding: 24px 28px;
+            padding: 28px 32px;
             list-style: none;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 8px;
             scrollbar-width: thin;
-            scrollbar-color: rgba(77,171,247,0.2) transparent;
+            scrollbar-color: var(--neon-cyan-dim) transparent;
         }
-
-        .messages-list::-webkit-scrollbar { width: 5px; }
+        .messages-list::-webkit-scrollbar { width: 4px; }
         .messages-list::-webkit-scrollbar-track { background: transparent; }
         .messages-list::-webkit-scrollbar-thumb {
-            background: rgba(77,171,247,0.25);
+            background: linear-gradient(180deg, var(--neon-cyan), var(--neon-magenta));
             border-radius: 10px;
+            opacity: 0.5;
         }
         .messages-list::-webkit-scrollbar-thumb:hover {
-            background: rgba(77,171,247,0.5);
+            opacity: 0.8;
         }
 
         .message-item {
-            padding: 10px 16px;
-            border-radius: var(--radius-sm);
-            background: rgba(255,255,255,0.025);
-            border: 1px solid var(--border-glass);
-            max-width: 72%;
+            padding: 12px 18px;
+            border-radius: var(--radius-md);
+            background: rgba(255,255,255,0.018);
+            border: 1px solid var(--border-subtle);
+            max-width: 70%;
             word-wrap: break-word;
             align-self: flex-start;
-            animation: msgEnter 0.45s cubic-bezier(0.16, 1, 0.3, 1);
-            transition: background 0.2s ease, border-color 0.2s ease;
+            animation: msgSlideIn 0.5s var(--ease-out-expo) both;
+            transition: all 0.3s ease;
             position: relative;
+            overflow: hidden;
         }
-
+        .message-item::after {
+            content: '';
+            position: absolute; inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, transparent 60%, var(--neon-cyan-dim) 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
         .message-item:hover {
-            background: rgba(255,255,255,0.05);
-            border-color: rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.035);
+            border-color: rgba(0,229,255,0.15);
+            transform: translateX(3px);
         }
-
+        .message-item:hover::after {
+            opacity: 1;
+        }
         .message-item.own {
             align-self: flex-end;
-            background: var(--accent-blue-dim);
-            border-color: rgba(77,171,247,0.2);
+            background: linear-gradient(135deg, rgba(0,229,255,0.08), rgba(255,45,149,0.05));
+            border-color: rgba(0,229,255,0.15);
         }
-
         .message-item.own:hover {
-            background: rgba(77,171,247,0.22);
-            border-color: rgba(77,171,247,0.35);
+            background: linear-gradient(135deg, rgba(0,229,255,0.14), rgba(255,45,149,0.08));
+            border-color: rgba(0,229,255,0.3);
+            transform: translateX(-3px);
         }
-
         .message-item.admin {
-            background: var(--accent-amber-dim);
-            border-left: 3px solid var(--accent-amber);
-            border-color: rgba(255,179,71,0.2);
+            background: linear-gradient(135deg, rgba(57,255,20,0.06), rgba(57,255,20,0.02));
+            border-left: 3px solid var(--neon-green);
+            border-color: rgba(57,255,20,0.18);
+        }
+        .message-item.admin:hover {
+            background: linear-gradient(135deg, rgba(57,255,20,0.1), rgba(57,255,20,0.04));
+            border-color: rgba(57,255,20,0.3);
         }
 
         .message-header {
             display: flex;
             justify-content: space-between;
             align-items: baseline;
-            margin-bottom: 4px;
+            margin-bottom: 6px;
         }
-
         .message-name {
             font-family: var(--font-display);
             font-weight: 700;
-            font-size: 0.78em;
-            letter-spacing: 0.02em;
-            color: var(--accent-blue);
+            font-size: 0.76em;
+            letter-spacing: 0.03em;
+            color: var(--neon-cyan);
         }
-
-        .message-item.own .message-name { color: var(--accent-blue); }
-        .message-item.admin .message-name { color: var(--accent-amber); }
-
+        .message-item.own .message-name { color: var(--neon-magenta); }
+        .message-item.admin .message-name { color: var(--neon-green); }
         .message-time {
             font-family: var(--font-mono);
-            font-size: 0.65em;
+            font-size: 0.62em;
             color: var(--text-muted);
             margin-left: auto;
-            padding-left: 12px;
+            padding-left: 14px;
             white-space: nowrap;
+            font-weight: 500;
         }
-
         .message-content {
-            font-size: 0.9em;
-            line-height: 1.6;
+            font-size: 0.88em;
+            line-height: 1.65;
             color: var(--text-primary);
             font-weight: 400;
         }
-
         .message-content a {
-            color: var(--accent-blue);
+            color: var(--neon-cyan);
             text-decoration: none;
-            border-bottom: 1px solid rgba(77,171,247,0.3);
+            border-bottom: 1px solid rgba(0,229,255,0.25);
             transition: border-color 0.2s;
         }
-
         .message-content a:hover {
-            border-color: var(--accent-blue);
+            border-color: var(--neon-cyan);
         }
-
         .message-content img {
             max-width: 100%;
-            border-radius: var(--radius-xs);
-            margin-top: 8px;
+            border-radius: var(--radius-sm);
+            margin-top: 10px;
             border: 1px solid var(--border-glass);
+            transition: transform 0.3s ease;
+        }
+        .message-content img:hover {
+            transform: scale(1.02);
         }
 
         .input-area {
-            padding: 14px 28px 18px;
+            padding: 16px 32px 20px;
             border-top: 1px solid var(--border-glass);
-            background: rgba(10,10,24,0.4);
+            background: rgba(6,11,22,0.5);
             flex-shrink: 0;
             position: relative;
         }
-
         .toolbar {
             display: flex;
-            gap: 6px;
-            margin-bottom: 10px;
+            gap: 8px;
+            margin-bottom: 12px;
         }
-
         .toolbar button {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid var(--border-glass);
-            padding: 5px 12px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-subtle);
+            padding: 6px 14px;
             border-radius: 9999px;
             cursor: pointer;
-            font-size: 0.78em;
+            font-size: 0.75em;
             font-family: var(--font-body);
             font-weight: 500;
             color: var(--text-secondary);
-            transition: all 0.25s ease;
+            transition: all 0.3s var(--ease-out-expo);
+            letter-spacing: 0.01em;
         }
-
         .toolbar button:hover {
-            background: rgba(77,171,247,0.12);
-            border-color: rgba(77,171,247,0.3);
-            color: var(--accent-blue);
-            transform: translateY(-1px);
+            background: var(--neon-cyan-dim);
+            border-color: rgba(0,229,255,0.25);
+            color: var(--neon-cyan);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px var(--neon-cyan-dim);
         }
 
         .input-row {
             display: flex;
-            gap: 10px;
+            gap: 12px;
         }
-
         .input-row input[type="text"] {
             flex: 1;
-            padding: 13px 20px;
-            background: rgba(255,255,255,0.04);
+            padding: 14px 22px;
+            background: rgba(255,255,255,0.03);
             border: 1px solid var(--border-glass);
             border-radius: 9999px;
-            font-size: 0.9em;
+            font-size: 0.88em;
             font-family: var(--font-body);
             font-weight: 400;
             color: var(--text-primary);
             outline: none;
-            transition: all 0.3s ease;
+            transition: all 0.4s var(--ease-out-expo);
         }
-
         .input-row input[type="text"]::placeholder {
             color: var(--text-muted);
             font-style: italic;
         }
-
         .input-row input[type="text"]:focus {
-            border-color: var(--accent-blue);
-            background: rgba(77,171,247,0.06);
-            box-shadow: 0 0 0 4px rgba(77,171,247,0.08);
+            border-color: var(--neon-cyan);
+            background: rgba(0,229,255,0.04);
+            box-shadow: 0 0 0 5px rgba(0,229,255,0.06), 0 0 24px rgba(0,229,255,0.08);
         }
 
         .btn-send {
-            padding: 13px 28px;
-            background: linear-gradient(135deg, var(--accent-blue) 0%, #3b82f6 100%);
-            color: #fff;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, var(--neon-cyan) 0%, #00b8d4 100%);
+            color: #02040a;
             border: none;
             border-radius: 9999px;
             cursor: pointer;
-            font-size: 0.88em;
+            font-size: 0.85em;
             font-family: var(--font-display);
             font-weight: 700;
-            letter-spacing: 0.03em;
-            transition: all 0.3s ease;
+            letter-spacing: 0.04em;
+            transition: all 0.35s var(--ease-out-expo);
             position: relative;
             overflow: hidden;
         }
-
         .btn-send::before {
             content: '';
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.2) 50%, transparent 100%);
-            transform: translateX(-100%);
-            transition: transform 0.6s ease;
+            position: absolute; inset: 0;
+            background: linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+            transform: translateX(-100%) skewX(-15deg);
+            transition: transform 0.7s ease;
         }
-
         .btn-send:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(77,171,247,0.35);
+            box-shadow: 0 10px 40px rgba(0,229,255,0.4), 0 0 60px rgba(0,229,255,0.15);
         }
-
         .btn-send:hover::before {
-            transform: translateX(100%);
+            transform: translateX(100%) skewX(-15deg);
         }
-
         .btn-send:active {
-            transform: translateY(0) scale(0.97);
+            transform: translateY(0) scale(0.96);
         }
 
         /* Sidebar */
         .sidebar {
-            width: 230px;
+            width: 240px;
             border-left: 1px solid var(--border-glass);
-            background: rgba(8,8,20,0.35);
+            background: rgba(4,8,18,0.45);
             display: flex;
             flex-direction: column;
             flex-shrink: 0;
         }
-
         .sidebar-header {
-            padding: 16px 20px;
+            padding: 18px 22px;
             border-bottom: 1px solid var(--border-glass);
             font-family: var(--font-display);
             font-weight: 700;
-            font-size: 0.82em;
-            letter-spacing: 0.04em;
+            font-size: 0.78em;
+            letter-spacing: 0.08em;
             color: var(--text-secondary);
             text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
-
+        .sidebar-header::before {
+            content: '';
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--neon-green);
+            box-shadow: 0 0 8px var(--neon-green);
+            animation: dotPulse 2s ease-in-out infinite;
+        }
         .users-list {
             flex: 1;
             overflow-y: auto;
-            padding: 10px 12px;
+            padding: 10px 14px;
             list-style: none;
             scrollbar-width: thin;
-            scrollbar-color: rgba(77,171,247,0.15) transparent;
+            scrollbar-color: var(--neon-cyan-dim) transparent;
         }
-
         .users-list::-webkit-scrollbar { width: 3px; }
         .users-list::-webkit-scrollbar-thumb {
-            background: rgba(77,171,247,0.2);
+            background: linear-gradient(180deg, var(--neon-cyan), var(--neon-magenta));
             border-radius: 10px;
         }
-
         .user-item {
-            padding: 9px 12px;
-            border-radius: var(--radius-xs);
-            margin-bottom: 3px;
-            font-size: 0.82em;
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
+            margin-bottom: 4px;
+            font-size: 0.8em;
             font-weight: 400;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             color: var(--text-secondary);
-            transition: all 0.2s ease;
+            transition: all 0.25s var(--ease-out-expo);
             border: 1px solid transparent;
+            cursor: default;
         }
-
         .user-item:hover {
-            background: rgba(255,255,255,0.03);
-            border-color: var(--border-glass);
+            background: rgba(0,229,255,0.04);
+            border-color: rgba(0,229,255,0.1);
             color: var(--text-primary);
+            transform: translateX(2px);
         }
-
         .user-item .dot {
-            width: 7px;
-            height: 7px;
+            width: 8px; height: 8px;
             border-radius: 50%;
-            background: var(--accent-blue);
-            box-shadow: 0 0 8px rgba(77,171,247,0.5);
+            background: var(--neon-cyan);
+            box-shadow: 0 0 10px var(--neon-cyan-glow);
             flex-shrink: 0;
-            animation: breathe 2s ease-in-out infinite;
+            animation: dotPulse 2.5s ease-in-out infinite;
         }
-
         .user-item.admin .dot {
-            background: var(--accent-amber);
-            box-shadow: 0 0 8px rgba(255,179,71,0.5);
-            animation: breathe 1.5s ease-in-out infinite;
+            background: var(--neon-green);
+            box-shadow: 0 0 10px rgba(57,255,20,0.5);
+            animation: dotPulse 1.8s ease-in-out infinite;
         }
-
         .user-item.admin {
-            background: var(--accent-amber-dim);
-            border-color: rgba(255,179,71,0.2);
-            color: var(--accent-amber);
+            background: var(--neon-green-dim);
+            border-color: rgba(57,255,20,0.15);
+            color: var(--neon-green);
             font-weight: 500;
+        }
+        @keyframes dotPulse {
+            0%, 100% { opacity: 0.5; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.4); }
         }
 
         /* Modal */
         .modal {
             display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(5,5,13,0.85);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            position: fixed; inset: 0;
+            background: rgba(2,4,10,0.88);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             justify-content: center;
             align-items: center;
             z-index: 1000;
         }
-
         .modal.show { display: flex; }
-
         .modal-content {
-            background: var(--bg-deep);
-            padding: 32px;
+            background: var(--abyss);
+            padding: 36px;
             border-radius: var(--radius-lg);
             width: 90%;
-            max-width: 440px;
+            max-width: 460px;
             border: 1px solid var(--border-glass);
-            box-shadow: 0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03) inset;
-            animation: modalEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow:
+                0 40px 100px rgba(0,0,0,0.7),
+                0 0 0 1px rgba(255,255,255,0.02) inset,
+                0 0 60px rgba(0,229,255,0.04);
+            animation: modalReveal 0.45s var(--ease-out-expo);
+            position: relative;
+            overflow: hidden;
         }
-
+        .modal-content::before {
+            content: '';
+            position: absolute; top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--neon-cyan), var(--neon-magenta), transparent);
+            opacity: 0.5;
+        }
+        @keyframes modalReveal {
+            from { opacity: 0; transform: translateY(50px) scale(0.9); filter: blur(8px); }
+            to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+        }
         .modal-content h3 {
             font-family: var(--font-display);
-            font-size: 1.15em;
+            font-size: 1.2em;
             font-weight: 700;
-            letter-spacing: -0.01em;
-            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+            margin-bottom: 22px;
             color: var(--text-primary);
         }
-
         .modal-content input,
         .modal-content select {
             width: 100%;
-            padding: 12px 16px;
-            background: rgba(255,255,255,0.04);
+            padding: 13px 18px;
+            background: rgba(255,255,255,0.03);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius-sm);
             margin-bottom: 10px;
-            font-size: 0.92em;
+            font-size: 0.9em;
             font-family: var(--font-body);
             color: var(--text-primary);
             outline: none;
-            transition: all 0.3s ease;
+            transition: all 0.3s var(--ease-out-expo);
         }
-
         .modal-content input:focus,
         .modal-content select:focus {
-            border-color: var(--accent-blue);
-            box-shadow: 0 0 0 3px rgba(77,171,247,0.08);
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 0 4px rgba(0,229,255,0.06);
+            background: rgba(0,229,255,0.04);
         }
-
         .modal-content input::placeholder {
             color: var(--text-muted);
         }
 
         .btn-primary {
             width: 100%;
-            padding: 13px;
-            background: linear-gradient(135deg, var(--accent-blue), #3b82f6);
-            color: #fff;
+            padding: 14px;
+            background: linear-gradient(135deg, var(--neon-cyan), #00b8d4);
+            color: #02040a;
             border: none;
             border-radius: var(--radius-sm);
             cursor: pointer;
-            font-size: 0.9em;
+            font-size: 0.88em;
             font-family: var(--font-display);
             font-weight: 700;
-            letter-spacing: 0.02em;
-            transition: all 0.3s ease;
+            letter-spacing: 0.03em;
+            transition: all 0.35s var(--ease-out-expo);
+            position: relative;
+            overflow: hidden;
         }
-
         .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(77,171,247,0.3);
+            box-shadow: 0 8px 35px rgba(0,229,255,0.35);
         }
-
+        .btn-primary:active {
+            transform: translateY(0) scale(0.97);
+        }
         .btn-secondary {
             width: 100%;
-            padding: 13px;
-            background: rgba(255,255,255,0.04);
+            padding: 14px;
+            background: rgba(255,255,255,0.03);
             color: var(--text-secondary);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius-sm);
             cursor: pointer;
-            font-size: 0.9em;
+            font-size: 0.88em;
             font-family: var(--font-display);
             font-weight: 500;
             margin-top: 8px;
-            transition: all 0.3s ease;
+            transition: all 0.3s var(--ease-out-expo);
         }
-
         .btn-secondary:hover {
-            background: rgba(77,171,247,0.08);
-            border-color: rgba(77,171,247,0.3);
-            color: var(--accent-blue);
+            background: rgba(0,229,255,0.06);
+            border-color: rgba(0,229,255,0.25);
+            color: var(--neon-cyan);
         }
-
         .btn-danger {
-            background: rgba(240,101,149,0.15);
-            color: var(--accent-rose);
-            border: 1px solid rgba(240,101,149,0.3);
+            background: rgba(255,45,149,0.12);
+            color: var(--neon-magenta);
+            border: 1px solid rgba(255,45,149,0.25);
         }
-
         .btn-danger:hover {
-            background: rgba(240,101,149,0.25);
-            box-shadow: 0 8px 25px rgba(240,101,149,0.2);
+            background: rgba(255,45,149,0.22);
+            box-shadow: 0 8px 30px rgba(255,45,149,0.2);
         }
 
         .system-message {
             text-align: center;
             color: var(--text-muted);
-            font-size: 0.8em;
-            padding: 20px;
+            font-size: 0.78em;
+            padding: 24px;
             font-style: italic;
             font-family: var(--font-mono);
             align-self: center;
+            animation: fadeIn 1s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
 
         .admin-badge {
-            background: linear-gradient(135deg, var(--accent-amber), #f08c00);
-            color: #fff;
-            font-size: 0.65em;
-            padding: 2px 7px;
+            background: linear-gradient(135deg, var(--neon-green), #00c853);
+            color: #02040a;
+            font-size: 0.6em;
+            padding: 3px 8px;
             border-radius: 9999px;
-            margin-left: 4px;
+            margin-left: 5px;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.06em;
             font-family: var(--font-display);
+            box-shadow: 0 0 10px rgba(57,255,20,0.3);
         }
-
         .delete-btn {
             background: none;
-            border: 1px solid rgba(240,101,149,0.3);
-            color: var(--accent-rose);
+            border: 1px solid rgba(255,45,149,0.25);
+            color: var(--neon-magenta);
             padding: 2px 8px;
             border-radius: 9999px;
-            font-size: 0.7em;
+            font-size: 0.68em;
             cursor: pointer;
-            margin-left: 8px;
-            transition: all 0.2s ease;
+            margin-left: 10px;
+            transition: all 0.25s var(--ease-out-expo);
             font-family: var(--font-display);
             font-weight: 700;
         }
-
         .delete-btn:hover {
-            background: rgba(240,101,149,0.2);
-            box-shadow: 0 0 12px rgba(240,101,149,0.3);
+            background: rgba(255,45,149,0.18);
+            box-shadow: 0 0 14px rgba(255,45,149,0.3);
+            transform: scale(1.1);
         }
 
-        /* Emoji */
+        /* Emoji panel */
         .emoji-panel {
             display: none;
             position: absolute;
             bottom: 100%;
-            left: 28px;
-            margin-bottom: 8px;
-            background: var(--bg-deep);
+            left: 32px;
+            margin-bottom: 10px;
+            background: var(--abyss);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius-md);
-            padding: 12px;
-            box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+            padding: 14px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px rgba(0,229,255,0.05);
             z-index: 100;
-            max-width: 320px;
-            backdrop-filter: blur(30px);
-            -webkit-backdrop-filter: blur(30px);
+            max-width: 340px;
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            animation: emojiPop 0.25s var(--ease-spring);
         }
-
         .emoji-panel.show { display: block; }
-
+        @keyframes emojiPop {
+            from { opacity: 0; transform: translateY(8px) scale(0.92); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
         .emoji-grid {
             display: grid;
             grid-template-columns: repeat(8, 1fr);
             gap: 5px;
         }
-
         .emoji-grid span {
             cursor: pointer;
-            font-size: 1.25em;
-            padding: 5px;
+            font-size: 1.2em;
+            padding: 6px;
             text-align: center;
-            border-radius: var(--radius-xs);
-            transition: all 0.15s ease;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s var(--ease-spring);
         }
-
         .emoji-grid span:hover {
-            background: var(--accent-blue-dim);
-            transform: scale(1.25);
+            background: var(--neon-cyan-dim);
+            transform: scale(1.3);
         }
 
         /* Email verify */
@@ -1046,192 +1175,178 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             gap: 8px;
             margin-bottom: 8px;
         }
-
         .email-verify-row input {
             flex: 1;
-            background: rgba(255,255,255,0.04);
+            background: rgba(255,255,255,0.03);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius-sm);
-            padding: 10px 14px;
+            padding: 11px 16px;
             color: var(--text-primary);
             outline: none;
             font-family: var(--font-body);
-            transition: all 0.3s ease;
+            transition: all 0.3s var(--ease-out-expo);
         }
-
         .email-verify-row input:focus {
-            border-color: var(--accent-blue);
-            box-shadow: 0 0 0 3px rgba(77,171,247,0.08);
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 0 3px rgba(0,229,255,0.06);
         }
-
         .email-verify-row button {
             white-space: nowrap;
-            padding: 10px 14px;
-            background: linear-gradient(135deg, var(--accent-blue), #3b82f6);
-            color: #fff;
+            padding: 11px 16px;
+            background: linear-gradient(135deg, var(--neon-cyan), #00b8d4);
+            color: #02040a;
             border: none;
             border-radius: var(--radius-sm);
             cursor: pointer;
             font-weight: 600;
             font-family: var(--font-display);
-            font-size: 0.85em;
-            transition: all 0.3s ease;
+            font-size: 0.82em;
+            letter-spacing: 0.02em;
+            transition: all 0.3s var(--ease-out-expo);
         }
-
         .email-verify-row button:hover {
             transform: translateY(-1px);
-            box-shadow: 0 4px 20px rgba(77,171,247,0.3);
+            box-shadow: 0 4px 20px rgba(0,229,255,0.3);
         }
-
         .email-verify-row button:disabled {
-            background: rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.05);
             color: var(--text-muted);
             cursor: not-allowed;
             box-shadow: none;
             transform: none;
         }
-
         .countdown {
             color: var(--text-muted);
-            font-size: 0.78em;
+            font-size: 0.76em;
             font-family: var(--font-mono);
         }
 
         /* Settings */
         .settings-panel {
             display: none;
-            margin-top: 16px;
-            padding-top: 16px;
+            margin-top: 18px;
+            padding-top: 18px;
             border-top: 1px solid var(--border-glass);
         }
         .settings-panel.show { display: block; }
-
         .form-group {
-            margin-bottom: 12px;
+            margin-bottom: 14px;
         }
-
         .form-group label {
             display: block;
-            margin-bottom: 5px;
-            font-size: 0.8em;
+            margin-bottom: 6px;
+            font-size: 0.76em;
             color: var(--text-secondary);
-            font-weight: 500;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.06em;
             font-family: var(--font-display);
         }
-
         .toggle-row {
             display: flex;
             align-items: center;
-            gap: 12px;
-            margin-bottom: 14px;
+            gap: 14px;
+            margin-bottom: 16px;
         }
-
         .toggle-row input[type="checkbox"] {
-            width: 44px;
-            height: 24px;
+            width: 46px; height: 26px;
             appearance: none;
-            background: rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.06);
             border: 1px solid var(--border-glass);
-            border-radius: 24px;
+            border-radius: 26px;
             position: relative;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.35s var(--ease-out-expo);
             flex-shrink: 0;
         }
-
         .toggle-row input[type="checkbox"]:checked {
-            background: var(--accent-blue);
-            border-color: var(--accent-blue);
+            background: var(--neon-cyan);
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 16px var(--neon-cyan-glow);
         }
-
         .toggle-row input[type="checkbox"]::after {
             content: '';
             position: absolute;
-            width: 18px;
-            height: 18px;
+            width: 20px; height: 20px;
             background: #fff;
             border-radius: 50%;
-            top: 2px;
-            left: 2px;
-            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            top: 2px; left: 2px;
+            transition: transform 0.35s var(--ease-spring);
         }
-
         .toggle-row input[type="checkbox"]:checked::after {
             transform: translateX(20px);
         }
-
         .toggle-row label {
             color: var(--text-secondary);
-            font-size: 0.9em;
+            font-size: 0.88em;
         }
-
         hr {
             border: none;
             border-top: 1px solid var(--border-glass);
-            margin: 15px 0;
+            margin: 16px 0;
         }
-
         .form-group input,
         .form-group select {
             width: 100%;
-            padding: 10px 14px;
-            background: rgba(255,255,255,0.04);
+            padding: 11px 16px;
+            background: rgba(255,255,255,0.03);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius-sm);
-            font-size: 0.9em;
+            font-size: 0.88em;
             font-family: var(--font-body);
             color: var(--text-primary);
             outline: none;
+            transition: all 0.3s var(--ease-out-expo);
         }
-
         .form-group input:focus,
         .form-group select:focus {
-            border-color: var(--accent-blue);
+            border-color: var(--neon-cyan);
         }
-
         .form-group select {
             appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23868e96' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238892a4' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
             background-repeat: no-repeat;
-            background-position: right 12px center;
+            background-position: right 14px center;
         }
 
         /* Animations */
-        @keyframes msgEnter {
-            from { opacity: 0; transform: translateY(16px) scale(0.96); }
+        @keyframes msgSlideIn {
+            from { opacity: 0; transform: translateY(20px) scale(0.95); }
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
-
-        @keyframes modalEnter {
-            from { opacity: 0; transform: translateY(40px) scale(0.93); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-
-        @keyframes breathe {
-            0%, 100% { opacity: 0.6; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.3); }
+        @keyframes shimmer {
+            0% { background-position: -200% center; }
+            100% { background-position: 200% center; }
         }
 
         @media (max-width: 640px) {
             .sidebar { display: none; }
             .chat-container { height: 100vh; border-radius: 0; max-width: 100%; }
-            .chat-header { padding: 14px 16px; }
-            .messages-list { padding: 16px; }
-            .input-area { padding: 10px 16px 14px; }
-            .message-item { max-width: 88%; }
-            .btn-ghost { padding: 6px 12px; font-size: 0.75em; }
+            .chat-header { padding: 16px 20px; }
+            .messages-list { padding: 18px 20px; }
+            .input-area { padding: 12px 20px 16px; }
+            .message-item { max-width: 85%; }
+            .btn-ghost { padding: 7px 14px; font-size: 0.72em; }
+            .cursor-trail { display: none; }
         }
     </style>
 </head>
 <body>
+    <!-- Animated background blobs -->
+    <div class="bg-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+    <div class="grain"></div>
+    <div class="cursor-trail" id="cursorTrail"></div>
+
     <div class="chat-container">
         <div class="chat-header">
             <div class="brand">
-                <div class="brand-logo">⬡</div>
+                <div class="brand-logo">◆</div>
                 <div>
-                    <h1>Lumen Chat</h1>
+                    <h1>Nebula Chat</h1>
                     <div class="online-count" id="onlineCount">0 在线</div>
                 </div>
             </div>
@@ -1280,7 +1395,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
 
             <div id="emailVerifySection" style="display:none;">
                 <hr>
-                <p style="font-size:0.82em;color:var(--text-muted);margin-bottom:10px;">需要邮箱验证后才能聊天</p>
+                <p style="font-size:0.8em;color:var(--text-muted);margin-bottom:12px;">需要邮箱验证后才能聊天</p>
                 <div class="email-verify-row">
                     <input type="email" id="emailInput" placeholder="邮箱地址">
                     <button id="sendCodeBtn" onclick="sendVerifyCode()">发送验证码</button>
@@ -1303,7 +1418,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             <input type="password" id="adminPassword" placeholder="管理员密码">
             <button class="btn-primary" onclick="adminLogin()">登录</button>
 
-            <div id="adminPanel" style="display:none; margin-top:16px;">
+            <div id="adminPanel" style="display:none; margin-top:18px;">
                 <button class="btn-primary btn-danger" onclick="clearAllMessages()">清空所有消息</button>
                 <button class="btn-secondary" onclick="toggleSettings()" style="margin-bottom:8px;">邮箱设置</button>
 
@@ -1338,7 +1453,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                     </div>
                     <div class="form-group">
                         <label>发件人名称</label>
-                        <input type="text" id="smtpFromName" value="Lumen Chat">
+                        <input type="text" id="smtpFromName" value="Nebula Chat">
                     </div>
 
                     <button class="btn-primary" onclick="saveEmailConfig()">保存配置</button>
@@ -1367,6 +1482,20 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         let countdownTimer = null;
 
         const emojis = ['😀','😃','😄','😁','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🥸','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤔','🤭','🤫','🤥','😶','😐','😑','😬','🙄','😯','😦','😧','😮','😲','🥱','😴','🤤','😪','😵','🤐','🥴','🤢','🤮','🤧','😷','🤒','🤕','🤑','🤠','😈','👿','👹','👺','🤡','💩','👻','💀','☠️','👽','👾','🤖','🎃','😺','😸','😹','😻','😼','😽','🙀','😿','😾'];
+
+        // Cursor trail
+        const trail = document.getElementById('cursorTrail');
+        let mouseX = -200, mouseY = -200;
+        document.addEventListener('mousemove', e => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+        function animateTrail() {
+            trail.style.left = mouseX + 'px';
+            trail.style.top = mouseY + 'px';
+            requestAnimationFrame(animateTrail);
+        }
+        animateTrail();
 
         document.addEventListener('DOMContentLoaded', () => {
             initEmojiPanel();
@@ -1598,7 +1727,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 const isOwn = msg.name === userName;
                 const isAdminMsg = msg.name === '管理员' || msg.name.includes('admin');
                 li.className = 'message-item' + (isOwn ? ' own' : '') + (isAdminMsg ? ' admin' : '');
-                li.style.animationDelay = `${Math.min(i * 0.02, 0.3)}s`;
+                li.style.animationDelay = `${Math.min(i * 0.015, 0.25)}s`;
                 let content = msg.content;
                 if (msg.type === 'image') {
                     content = `<img src="${escapeHtml(content)}" alt="图片" onerror="this.style.display='none'">`;
@@ -1621,9 +1750,10 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             document.getElementById('onlineCount').textContent = `${users.length} 在线`;
             const list = document.getElementById('usersList');
             list.innerHTML = '';
-            users.forEach(u => {
+            users.forEach((u, i) => {
                 const li = document.createElement('li');
                 li.className = 'user-item' + (u.is_admin ? ' admin' : '');
+                li.style.animationDelay = `${i * 0.03}s`;
                 li.innerHTML = `<span class="dot"></span>${escapeHtml(u.name)}${u.is_admin ? ' <span style="font-size:0.7em;opacity:0.5;">ADMIN</span>' : ''}`;
                 list.appendChild(li);
             });
