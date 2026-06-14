@@ -14,11 +14,14 @@ $banned_file = "banned.json";
 $email_config_file = "email_config.json";
 $email_codes_file = "email_codes.json";
 $db_config_file = "db_config.json";
+$filter_file = "filter.json";
+$typing_file = "typing.json";
 $messages_buffer_size = 200;
 $admin_password = "admin123"; // 建议修改此密码
+$recall_timeout = 120; // 消息撤回时限（秒）
 
 // 创建必要文件
-foreach ([$messages_buffer_file, $users_file, $banned_file, $email_config_file, $email_codes_file, $db_config_file] as $file) {
+foreach ([$messages_buffer_file, $users_file, $banned_file, $email_config_file, $email_codes_file, $db_config_file, $filter_file, $typing_file] as $file) {
     if (!file_exists($file)) {
         file_put_contents($file, json_encode([]));
     }
@@ -274,6 +277,42 @@ if ($db_enabled) {
     db_init_tables();
 }
 
+// 敏感词过滤
+function filter_content($content) {
+    global $filter_file;
+    $filter_config = read_json($filter_file);
+    if (empty($filter_config['enabled']) || empty($filter_config['words'])) return $content;
+    $words = explode("\n", $filter_config['words']);
+    foreach ($words as $word) {
+        $word = trim($word);
+        if (!empty($word)) {
+            $content = str_ireplace($word, str_repeat('*', mb_strlen($word)), $content);
+        }
+    }
+    return $content;
+}
+
+// 打字状态
+function get_typing_users() {
+    global $typing_file;
+    $typing = read_json($typing_file);
+    $now = time();
+    $active = [];
+    foreach ($typing as $name => $expire) {
+        if ($expire > $now) {
+            $active[] = $name;
+        }
+    }
+    return $active;
+}
+
+function set_typing($name) {
+    global $typing_file;
+    $typing = read_json($typing_file);
+    $typing[$name] = time() + 5;
+    write_json($typing_file, $typing);
+}
+
 // 读取数据
 function read_json($file) {
     $data = file_get_contents($file);
@@ -524,6 +563,15 @@ if (isset($_GET['action'])) {
             exit;
         }
 
+        // 敏感词过滤
+        $content = filter_content($content);
+
+        // 检测私聊 @用户名
+        $target = '';
+        if (preg_match('/^@(\S+)\s/', $content, $matches)) {
+            $target = $matches[1];
+        }
+
         $users = get_users();
         $users[$ip] = [
             'name' => $name,
@@ -541,7 +589,8 @@ if (isset($_GET['action'])) {
             'name' => $name,
             'content' => $content,
             'type' => $type,
-            'ip' => $ip
+            'ip' => $ip,
+            'target' => $target
         ];
 
         save_message($msg);
@@ -713,6 +762,98 @@ if (isset($_GET['action'])) {
             db_save_banned($ip, $until);
         }
         echo json_encode(['success' => true, 'message' => "同步完成，共同步 {$sync_count} 条消息"]);
+        exit;
+    }
+
+    // ========== 消息搜索 ==========
+    if ($_GET['action'] === 'search_messages') {
+        $keyword = isset($_GET['keyword']) ? trim($_GET['keyword']) : '';
+        if (empty($keyword)) {
+            echo json_encode([]);
+            exit;
+        }
+        $messages = get_messages();
+        $results = [];
+        foreach ($messages as $msg) {
+            if (mb_stripos($msg['content'], $keyword) !== false || mb_stripos($msg['name'], $keyword) !== false) {
+                $results[] = $msg;
+            }
+        }
+        echo json_encode($results);
+        exit;
+    }
+
+    // ========== 消息撤回（自己删除） ==========
+    if ($_GET['action'] === 'recall_message' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $input = json_decode(file_get_contents('php://input'), true);
+        $msg_id = isset($input['id']) ? intval($input['id']) : -1;
+        $ip = get_user_ip();
+
+        $messages = get_messages();
+        $found = null;
+        foreach ($messages as $msg) {
+            if ($msg['id'] === $msg_id) {
+                $found = $msg;
+                break;
+            }
+        }
+        if (!$found) {
+            echo json_encode(['success' => false, 'error' => '消息不存在']);
+            exit;
+        }
+        if ($found['ip'] !== $ip && empty($_SESSION['is_admin'])) {
+            echo json_encode(['success' => false, 'error' => '只能撤回自己的消息']);
+            exit;
+        }
+        if (time() - $found['time'] > $GLOBALS['recall_timeout'] && empty($_SESSION['is_admin'])) {
+            echo json_encode(['success' => false, 'error' => '超过撤回时限（2分钟）']);
+            exit;
+        }
+
+        delete_message_by_id($msg_id);
+        echo json_encode(['success' => true, 'recalled_name' => $found['name']]);
+        exit;
+    }
+
+    // ========== 打字状态 ==========
+    if ($_GET['action'] === 'set_typing' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $input = json_decode(file_get_contents('php://input'), true);
+        $name = isset($input['name']) ? trim($input['name']) : '';
+        if (!empty($name)) {
+            set_typing($name);
+        }
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    if ($_GET['action'] === 'get_typing') {
+        $typing = get_typing_users();
+        echo json_encode($typing);
+        exit;
+    }
+
+    // ========== 敏感词过滤配置 ==========
+    if ($_GET['action'] === 'get_filter_config') {
+        $config = read_json($filter_file);
+        echo json_encode([
+            'enabled' => !empty($config['enabled']),
+            'words' => $config['words'] ?? ''
+        ]);
+        exit;
+    }
+
+    if ($_GET['action'] === 'save_filter_config' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (empty($_SESSION['is_admin'])) {
+            echo json_encode(['success' => false, 'error' => '无权限']);
+            exit;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $config = [
+            'enabled' => !empty($input['enabled']),
+            'words' => $input['words'] ?? ''
+        ];
+        write_json($filter_file, $config);
+        echo json_encode(['success' => true]);
         exit;
     }
 
@@ -1662,6 +1803,122 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             from { opacity: 0; transform: translateY(20px) scale(0.95); }
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
+
+        /* Search bar */
+        .search-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+        .search-bar input {
+            flex: 1;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-glass);
+            border-radius: 9999px;
+            font-size: 0.8em;
+            font-family: var(--font-body);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s var(--ease-out-expo);
+        }
+        .search-bar input:focus {
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 0 3px rgba(0,229,255,0.06);
+        }
+        .search-bar button {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-subtle);
+            padding: 6px 14px;
+            border-radius: 9999px;
+            cursor: pointer;
+            font-size: 0.72em;
+            font-family: var(--font-body);
+            color: var(--text-secondary);
+            transition: all 0.3s var(--ease-out-expo);
+        }
+        .search-bar button:hover {
+            background: var(--neon-cyan-dim);
+            border-color: rgba(0,229,255,0.25);
+            color: var(--neon-cyan);
+        }
+
+        /* Private message */
+        .message-item.private {
+            background: linear-gradient(135deg, rgba(255,45,149,0.08), rgba(255,45,149,0.02));
+            border-left: 3px solid var(--neon-magenta);
+            border-color: rgba(255,45,149,0.25);
+        }
+        .message-item.private .message-name { color: var(--neon-magenta); }
+        .message-item.private::before {
+            content: '私聊';
+            position: absolute;
+            top: -8px;
+            right: 12px;
+            font-size: 0.6em;
+            background: linear-gradient(135deg, var(--neon-magenta), #ff6b9d);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-weight: 700;
+            font-family: var(--font-display);
+            letter-spacing: 0.04em;
+        }
+
+        /* Recalled message */
+        .message-item.recalled {
+            opacity: 0.5;
+            font-style: italic;
+            background: rgba(255,255,255,0.01);
+            border-style: dashed;
+        }
+        .message-item.recalled .message-content {
+            color: var(--text-muted);
+        }
+
+        /* Recall button */
+        .recall-btn {
+            background: none;
+            border: 1px solid rgba(255,170,0,0.3);
+            color: #ffaa00;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 0.65em;
+            cursor: pointer;
+            margin-left: 6px;
+            transition: all 0.25s var(--ease-out-expo);
+            font-family: var(--font-display);
+            font-weight: 700;
+        }
+        .recall-btn:hover {
+            background: rgba(255,170,0,0.15);
+            box-shadow: 0 0 10px rgba(255,170,0,0.25);
+            transform: scale(1.1);
+        }
+
+        /* Typing indicator */
+        #typingIndicator {
+            animation: fadeIn 0.3s ease;
+        }
+        .typing-dots {
+            display: inline-block;
+        }
+        .typing-dots span {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--neon-cyan);
+            margin: 0 1px;
+            animation: typingBounce 1.4s infinite;
+        }
+        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBounce {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-4px); opacity: 1; }
+        }
         @keyframes shimmer {
             0% { background-position: -200% center; }
             100% { background-position: 200% center; }
@@ -1715,14 +1972,23 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                         <button onclick="toggleEmoji()">表情</button>
                         <button onclick="insertImage()">图片</button>
                         <button onclick="exportChat()">导出</button>
+                        <button onclick="toggleSearch()">搜索</button>
+                    </div>
+
+                    <div class="search-bar" id="searchBar" style="display:none;">
+                        <input type="text" id="searchInput" placeholder="搜索消息..." onkeyup="searchMessages()">
+                        <button onclick="clearSearch()">清除</button>
+                        <span id="searchCount" style="font-size:0.75em;color:var(--text-muted);"></span>
                     </div>
 
                     <div class="emoji-panel" id="emojiPanel">
                         <div class="emoji-grid" id="emojiGrid"></div>
                     </div>
 
+                    <div id="typingIndicator" style="font-size:0.72em;color:var(--neon-cyan-dim);padding:0 32px 6px;min-height:18px;"></div>
+
                     <div class="input-row">
-                        <input type="text" id="messageInput" placeholder="输入消息..." maxlength="500" onkeypress="if(event.key==='Enter')sendMessage()">
+                        <input type="text" id="messageInput" placeholder="输入消息... @用户名 可私聊" maxlength="500" onkeypress="if(event.key==='Enter')sendMessage()" oninput="onTyping()">
                         <button class="btn-send" onclick="sendMessage()">发送</button>
                     </div>
                 </div>
@@ -1770,6 +2036,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 <button class="btn-primary btn-danger" onclick="clearAllMessages()">清空所有消息</button>
                 <button class="btn-secondary" onclick="toggleSettings()" style="margin-bottom:8px;">邮箱设置</button>
                 <button class="btn-secondary" onclick="toggleDbSettings()" style="margin-bottom:8px;">数据库设置</button>
+                <button class="btn-secondary" onclick="toggleFilterSettings()" style="margin-bottom:8px;">敏感词过滤</button>
 
                 <div class="settings-panel" id="settingsPanel">
                     <div class="toggle-row">
@@ -1837,6 +2104,21 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                     <button class="btn-secondary" onclick="syncToDb()">同步现有数据到数据库</button>
                     <p id="dbStatus" style="font-size:0.78em;color:var(--text-muted);margin-top:10px;"></p>
                 </div>
+
+                <div class="settings-panel" id="filterSettingsPanel">
+                    <div class="toggle-row">
+                        <input type="checkbox" id="filterEnabled">
+                        <label>启用敏感词过滤</label>
+                    </div>
+
+                    <div class="form-group">
+                        <label>敏感词列表（每行一个）</label>
+                        <textarea id="filterWords" rows="6" style="width:100%;background:rgba(255,255,255,0.03);border:1px solid var(--border-glass);border-radius:var(--radius-sm);padding:11px 16px;font-size:0.88em;font-family:var(--font-body);color:var(--text-primary);outline:none;resize:vertical;" placeholder="每行输入一个敏感词"></textarea>
+                    </div>
+
+                    <button class="btn-primary" onclick="saveFilterConfig()">保存配置</button>
+                    <p id="filterStatus" style="font-size:0.78em;color:var(--text-muted);margin-top:10px;"></p>
+                </div>
             </div>
         </div>
     </div>
@@ -1858,6 +2140,9 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         let emailEnabled = <?php echo $email_enabled ? 'true' : 'false'; ?>;
         let verifiedEmail = '<?php echo $verified_email; ?>';
         let countdownTimer = null;
+        let notifyEnabled = false;
+        let typingTimer = null;
+        let searchMode = false;
 
         const emojis = ['😀','😃','😄','😁','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🥸','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤔','🤭','🤫','🤥','😶','😐','😑','😬','🙄','😯','😦','😧','😮','😲','🥱','😴','🤤','😪','😵','🤐','🥴','🤢','🤮','🤧','😷','🤒','🤕','🤑','🤠','😈','👿','👹','👺','🤡','💩','👻','💀','☠️','👽','👾','🤖','🎃','😺','😸','😹','😻','😼','😽','🙀','😿','😾'];
 
@@ -1880,9 +2165,12 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             pollMessages();
             pollUsers();
             heartbeat();
+            pollTyping();
+            initNotifications();
             setInterval(pollMessages, 2000);
             setInterval(pollUsers, 5000);
             setInterval(heartbeat, 30000);
+            setInterval(pollTyping, 4000);
             if (emailEnabled && !verifiedEmail) {
                 document.getElementById('emailVerifySection').style.display = 'block';
             }
@@ -1988,6 +2276,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 document.getElementById('adminPanel').style.display = 'block';
                 loadEmailConfig();
                 loadDbConfig();
+                loadFilterConfig();
             }
         }
 
@@ -2127,6 +2416,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 localStorage.setItem('is_admin', 'true');
                 document.getElementById('adminPanel').style.display = 'block';
                 loadEmailConfig();
+                loadFilterConfig();
                 alert('管理员登录成功');
             } else {
                 alert(data.error || '密码错误');
@@ -2177,25 +2467,46 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             const list = document.getElementById('messagesList');
             const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
             list.innerHTML = '';
-            messages.forEach((msg, i) => {
+            let displayMessages = messages;
+            if (searchMode) {
+                displayMessages = window._searchResults || messages;
+            }
+            displayMessages.forEach((msg, i) => {
                 const li = document.createElement('li');
                 const isOwn = msg.name === userName;
-                const isAdminMsg = msg.name === '管理员' || msg.name.includes('admin');
-                li.className = 'message-item' + (isOwn ? ' own' : '') + (isAdminMsg ? ' admin' : '');
+                const isAdminMsg = msg.name === '管理员' || (msg.name && msg.name.includes('admin'));
+                const isPrivate = (msg.target && msg.target !== '') && (msg.target === userName || msg.name === userName);
+                const isRecalled = msg.type === 'recalled';
+
+                li.className = 'message-item';
+                if (isRecalled) li.className += ' recalled';
+                else if (isPrivate) li.className += ' private';
+                else if (isOwn) li.className += ' own';
+                if (isAdminMsg) li.className += ' admin';
+
                 li.style.animationDelay = `${Math.min(i * 0.015, 0.25)}s`;
+
                 let content = msg.content;
                 if (msg.type === 'image') {
                     content = `<img src="${escapeHtml(content)}" alt="图片" onerror="this.style.display='none'">`;
+                } else if (msg.type === 'recalled') {
+                    content = '<em>此消息已被撤回</em>';
                 } else {
                     content = escapeHtml(content).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+                    // 高亮@提及
+                    if (msg.content && msg.content.indexOf('@') === 0) {
+                        content = '<span style="color:var(--neon-magenta);">' + content + '</span>';
+                    }
                 }
+
                 const time = new Date(msg.time * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
                 const badge = isAdminMsg ? '<span class="admin-badge">管理</span>' : '';
                 const delBtn = isAdmin ? `<button class="delete-btn" onclick="deleteMessage(${msg.id})">×</button>` : '';
-                li.innerHTML = `<div class="message-header"><span class="message-name">${escapeHtml(msg.name)}${badge}</span><span class="message-time">${time}${delBtn}</span></div><div class="message-content">${content}</div>`;
+                const recallBtn = (isOwn && !isRecalled && msg.type !== 'image') ? `<button class="recall-btn" onclick="recallMessage(${msg.id})">撤回</button>` : '';
+                li.innerHTML = `<div class="message-header"><span class="message-name">${escapeHtml(msg.name)}${badge}</span><span class="message-time">${time}${recallBtn}${delBtn}</span></div><div class="message-content">${content}</div>`;
                 list.appendChild(li);
             });
-            if (atBottom || lastMessageId === -1) list.scrollTop = list.scrollHeight;
+            if (atBottom || lastMessageId === -1 || searchMode) list.scrollTop = list.scrollHeight;
             if (messages.length > 0) lastMessageId = messages[messages.length-1].id;
         }
 
@@ -2209,6 +2520,9 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 const li = document.createElement('li');
                 li.className = 'user-item' + (u.is_admin ? ' admin' : '');
                 li.style.animationDelay = `${i * 0.03}s`;
+                li.style.cursor = 'pointer';
+                li.title = `点击 @${u.name}`;
+                li.onclick = () => { document.getElementById('messageInput').value = `@${u.name} `; document.getElementById('messageInput').focus(); };
                 li.innerHTML = `<span class="dot"></span>${escapeHtml(u.name)}${u.is_admin ? ' <span style="font-size:0.7em;opacity:0.5;">ADMIN</span>' : ''}`;
                 list.appendChild(li);
             });
@@ -2267,6 +2581,157 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 document.getElementById('emojiPanel').classList.remove('show');
             }
         });
+
+        // ========== 消息搜索 ==========
+        function toggleSearch() {
+            const bar = document.getElementById('searchBar');
+            const show = bar.style.display === 'none';
+            bar.style.display = show ? 'flex' : 'none';
+            if (!show) {
+                clearSearch();
+            } else {
+                document.getElementById('searchInput').focus();
+            }
+        }
+
+        async function searchMessages() {
+            const keyword = document.getElementById('searchInput').value.trim();
+            if (!keyword) {
+                clearSearch();
+                return;
+            }
+            searchMode = true;
+            const response = await fetch(`?action=search_messages&keyword=${encodeURIComponent(keyword)}`);
+            const results = await response.json();
+            window._searchResults = results;
+            document.getElementById('searchCount').textContent = `找到 ${results.length} 条`;
+            renderMessages();
+        }
+
+        function clearSearch() {
+            searchMode = false;
+            window._searchResults = null;
+            document.getElementById('searchInput').value = '';
+            document.getElementById('searchCount').textContent = '';
+            renderMessages();
+        }
+
+        // ========== 打字状态 ==========
+        function onTyping() {
+            if (typingTimer) clearTimeout(typingTimer);
+            typingTimer = setTimeout(() => {
+                fetch('?action=set_typing', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: userName })
+                });
+            }, 300);
+        }
+
+        async function pollTyping() {
+            const response = await fetch('?action=get_typing');
+            const typing = await response.json();
+            const others = typing.filter(n => n !== userName);
+            const indicator = document.getElementById('typingIndicator');
+            if (others.length > 0) {
+                const names = others.slice(0, 3).join(', ');
+                const more = others.length > 3 ? ` 等${others.length}人` : '';
+                indicator.innerHTML = `${escapeHtml(names)}${more} 正在输入<span class="typing-dots"><span></span><span></span><span></span></span>`;
+            } else {
+                indicator.innerHTML = '';
+            }
+        }
+
+        // ========== 消息撤回 ==========
+        async function recallMessage(id) {
+            if (!confirm('撤回这条消息？')) return;
+            const response = await fetch('?action=recall_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            const data = await response.json();
+            if (data.success) {
+                pollMessages();
+            } else {
+                alert(data.error || '撤回失败');
+            }
+        }
+
+        // ========== 浏览器通知 ==========
+        function initNotifications() {
+            if (!('Notification' in window)) return;
+            if (Notification.permission === 'granted') {
+                notifyEnabled = true;
+            } else if (Notification.permission !== 'denied') {
+                Notification.requestPermission().then(p => {
+                    notifyEnabled = p === 'granted';
+                });
+            }
+        }
+
+        function sendNotification(title, body) {
+            if (!notifyEnabled || document.visibilityState === 'visible') return;
+            try {
+                new Notification(title, {
+                    body: body,
+                    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💬</text></svg>'
+                });
+            } catch(e) {}
+        }
+
+        // Override pollMessages to add notification
+        const _originalPollMessages = pollMessages;
+        pollMessages = async function() {
+            const response = await fetch('?action=get_messages', { cache: 'no-cache' });
+            const msgs = await response.json();
+            const newMsgs = msgs.length > messages.length ? msgs.slice(messages.length) : [];
+            if (newMsgs.length > 0 && messages.length > 0) {
+                newMsgs.forEach(msg => {
+                    if (msg.name !== userName) {
+                        sendNotification('Nebula Chat', `${msg.name}: ${msg.content.substring(0, 50)}`);
+                    }
+                });
+            }
+            if (msgs.length !== messages.length ||
+                (msgs.length > 0 && messages.length > 0 && msgs[msgs.length-1].id !== messages[messages.length-1].id)) {
+                messages = msgs;
+                if (!searchMode) renderMessages();
+            }
+        };
+
+        // ========== 敏感词过滤配置 ==========
+        function toggleFilterSettings() { document.getElementById('filterSettingsPanel').classList.toggle('show'); }
+
+        async function loadFilterConfig() {
+            const response = await fetch('?action=get_filter_config');
+            const config = await response.json();
+            document.getElementById('filterEnabled').checked = config.enabled;
+            document.getElementById('filterWords').value = config.words;
+        }
+
+        async function saveFilterConfig() {
+            const config = {
+                enabled: document.getElementById('filterEnabled').checked,
+                words: document.getElementById('filterWords').value
+            };
+            const statusEl = document.getElementById('filterStatus');
+            statusEl.textContent = '保存中...';
+            statusEl.style.color = 'var(--text-secondary)';
+            const response = await fetch('?action=save_filter_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+            const data = await response.json();
+            if (data.success) {
+                statusEl.textContent = '配置已保存';
+                statusEl.style.color = 'var(--neon-green)';
+            } else {
+                statusEl.textContent = data.error || '保存失败';
+                statusEl.style.color = 'var(--neon-magenta)';
+            }
+        }
     </script>
 </body>
 </html>
