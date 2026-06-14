@@ -1,5 +1,9 @@
 # PHP 单文件聊天室
 
+[![PHP Version](https://img.shields.io/badge/PHP-5.6%2B-blue.svg)](https://php.net)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![No Database](https://img.shields.io/badge/Database-None-orange.svg)]()
+
 一个功能完善的单文件PHP聊天室，无需数据库，适合虚拟主机部署。
 
 ## 功能特性
@@ -44,13 +48,20 @@ $admin_password = "你的新密码";
 | `users.json` | 在线用户数据 (自动创建) |
 | `banned.json` | 禁言列表 (自动创建) |
 
-## 截图
+## 技术栈
 
-- 现代化UI设计
-- 渐变背景、圆角卡片
-- 消息气泡样式
-- 移动端自适应
+- **后端**: PHP (单文件，无框架)
+- **前端**: HTML5 + CSS3 + JavaScript (原生)
+- **数据存储**: JSON文件 (无需数据库)
+- **通信**: AJAX轮询
+
+## 安全特性
+
+- XSS防护 (HTML转义)
+- 文件锁防止数据竞争
+- 管理员权限验证
+- IP禁言机制
 
 ## 许可证
 
-MIT License
+[MIT License](LICENSE)

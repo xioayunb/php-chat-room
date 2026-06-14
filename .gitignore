@@ -1,0 +1,15 @@
+# 数据文件（运行时自动生成）
+messages.json
+users.json
+banned.json
+
+# 日志文件
+chatlog.txt
+*.log
+
+# 上传的文件
+uploads/
+
+# 系统文件
+.DS_Store
+Thumbs.db
