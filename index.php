@@ -364,8 +364,32 @@ function filter_content($content) {
 }
 
 // ========== AI 自动回复 ==========
+// 内置默认配置：Pollinations 免费接口（无需注册/密钥，但有限流）；
+// 如需稳定服务，在管理面板切换为 OpenAI 兼容接口并填入自己的 Key。
+function ai_default_config() {
+    return [
+        'enabled' => true,
+        'api_style' => 'pollinations',
+        'api_url' => 'https://text.pollinations.ai',
+        'model' => 'openai',
+        'api_key' => '',
+        'ai_name' => 'AI助手',
+        'persona' => '',
+        'trigger_mode' => 'mention',
+        'context_count' => 10,
+    ];
+}
+
+function ai_read_config() {
+    $stored = read_json($GLOBALS['ai_config_file']);
+    return array_merge(ai_default_config(), is_array($stored) ? $stored : []);
+}
+
 // 调用 OpenAI 兼容接口（DeepSeek/OpenRouter/本地 vLLM 等均适用）
 function ai_call_api($config, $context_msgs, $test_prompt = null) {
+    if (($config['api_style'] ?? 'openai') === 'pollinations') {
+        return ai_call_pollinations($config, $context_msgs, $test_prompt);
+    }
     if (empty($config['api_url']) || empty($config['model'])) {
         return ['success' => false, 'error' => 'API地址或模型未配置'];
     }
@@ -428,10 +452,58 @@ function ai_call_api($config, $context_msgs, $test_prompt = null) {
     return ['success' => true, 'reply' => $content];
 }
 
+// 内置免费接口：Pollinations GET 文本模式（无需任何密钥）
+function ai_call_pollinations($config, $context_msgs, $test_prompt = null) {
+    if (empty($config['api_url'])) return ['success' => false, 'error' => '未配置接口地址'];
+    $ai_name = trim((string)($config['ai_name'] ?? '')) ?: 'AI助手';
+    $persona = trim((string)($config['persona'] ?? ''));
+    $head = "你是聊天室里的一名成员，名字叫「{$ai_name}」。";
+    if ($persona !== '') $head .= "你的人设：{$persona}";
+    $head .= "\n规则：用简体中文口语化短句回复，只输出回复内容本身，不要加引号或解释。";
+
+    if ($test_prompt !== null) {
+        $prompt = $head . "\n用户说：" . $test_prompt;
+    } else {
+        $lines = [];
+        foreach ($context_msgs as $m) {
+            if (!empty($m['target']) || ($m['type'] ?? '') !== 'text') continue;
+            $is_ai = ((string)$m['name'] === $ai_name);
+            $lines[] = ($is_ai ? $ai_name : (string)$m['name']) . '：' . (string)$m['content'];
+        }
+        if (!$lines) return null;
+        $prompt = $head . "\n最近聊天记录：\n" . implode("\n", array_slice($lines, -12))
+                . "\n请以「{$ai_name}」的身份回复最后一条消息：";
+    }
+
+    $url = rtrim((string)$config['api_url'], '/') . '/' . rawurlencode(mb_substr($prompt, 0, 1500));
+    if (!empty($config['model'])) $url .= '?model=' . rawurlencode((string)$config['model']);
+
+    $ctx = stream_context_create(['http' => [
+        'method' => 'GET', 'timeout' => 45, 'ignore_errors' => true,
+        'header' => "User-Agent: php-chat-room\r\nAccept: */*\r\n",
+    ]]);
+    $raw = @file_get_contents($url, false, $ctx);
+    if ($raw === false) return ['success' => false, 'error' => '接口连接失败'];
+
+    $j = json_decode($raw, true);
+    if (is_array($j) && isset($j['error'])) {
+        return ['success' => false, 'error' => '免费接口限流/不可用：' . mb_substr((string)$j['error'], 0, 80)];
+    }
+    $text = '';
+    if (is_array($j) && isset($j['choices'][0]['message']['content'])) {
+        $text = (string)$j['choices'][0]['message']['content'];
+    } elseif (!is_array($j)) {
+        $text = (string)$raw; // 纯文本响应
+    }
+    $text = preg_replace('/^[\s"“”]+|[\s"“”]+$/u', '', trim($text));
+    if ($text === '') return ['success' => false, 'error' => '接口返回为空'];
+    return ['success' => true, 'reply' => mb_substr($text, 0, 500)];
+}
+
 // 轮询驱动：检查新消息并在符合触发条件时生成 AI 回复
 function ai_maybe_reply() {
     global $ai_config_file, $ai_state_file;
-    $config = read_json($ai_config_file);
+    $config = ai_read_config();
     if (empty($config['enabled'])) return;
 
     $lock = acquire_lock(3);
@@ -1178,9 +1250,10 @@ if (isset($_GET['action'])) {
             echo json_encode(['success' => false, 'error' => '无权限']);
             exit;
         }
-        $config = read_json($ai_config_file);
+        $config = ai_read_config();
         echo json_encode([
             'enabled' => !empty($config['enabled']),
+            'api_style' => $config['api_style'] ?? 'pollinations',
             'api_url' => $config['api_url'] ?? '',
             'model' => $config['model'] ?? '',
             'has_key' => !empty($config['api_key']), // 密钥不回传，只告知是否已设置
@@ -1198,9 +1271,10 @@ if (isset($_GET['action'])) {
             exit;
         }
         $input = json_decode(file_get_contents('php://input'), true);
-        $old = read_json($ai_config_file);
+        $old = ai_read_config();
         $config = [
             'enabled' => !empty($input['enabled']),
+            'api_style' => in_array($input['api_style'] ?? '', ['openai', 'pollinations'], true) ? $input['api_style'] : 'pollinations',
             'api_url' => trim((string)($input['api_url'] ?? '')),
             'model' => trim((string)($input['model'] ?? '')),
             // 密钥留空表示沿用旧值
@@ -1222,7 +1296,7 @@ if (isset($_GET['action'])) {
             echo json_encode(['success' => false, 'error' => '无权限']);
             exit;
         }
-        $config = read_json($ai_config_file);
+        $config = ai_read_config();
         $result = ai_call_api($config, [], '你好，请用一两句话向大家打个招呼并介绍你自己');
         echo json_encode($result);
         exit;
@@ -1234,7 +1308,7 @@ if (isset($_GET['action'])) {
 $default_name = isset($_SESSION['chat_name']) ? $_SESSION['chat_name'] : '用户' . rand(1000, 9999);
 $email_config = read_json($email_config_file);
 $email_enabled = !empty($email_config['enabled']);
-$ai_page_cfg = read_json($ai_config_file);
+$ai_page_cfg = ai_read_config();
 $ai_bot_name = trim((string)($ai_page_cfg['ai_name'] ?? '')) ?: 'AI助手';
 $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email'] : '';
 ?>
@@ -2501,8 +2575,16 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                     </div>
 
                     <div class="form-group">
-                        <label>API 地址（OpenAI 兼容 /chat/completions）</label>
-                        <input type="text" id="aiApiUrl" placeholder="https://api.deepseek.com/v1/chat/completions">
+                        <label>接口类型</label>
+                        <select id="aiApiStyle">
+                            <option value="pollinations">内置免费接口（无需密钥，有限流）</option>
+                            <option value="openai">OpenAI 兼容接口（自备 Key）</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>API 地址（OpenAI 兼容 /chat/completions；内置接口留默认即可）</label>
+                        <input type="text" id="aiApiUrl">
                     </div>
                     <div class="form-group">
                         <label>模型名称</label>
@@ -3123,6 +3205,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
             const config = await response.json();
             if (config.success === false) return;
             document.getElementById('aiEnabled').checked = config.enabled;
+            document.getElementById('aiApiStyle').value = config.api_style;
             document.getElementById('aiApiUrl').value = config.api_url;
             document.getElementById('aiModel').value = config.model;
             document.getElementById('aiApiKey').placeholder = config.has_key ? '已设置，留空保持不变' : '';
@@ -3135,6 +3218,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         async function saveAiConfig() {
             const config = {
                 enabled: document.getElementById('aiEnabled').checked,
+                api_style: document.getElementById('aiApiStyle').value,
                 api_url: document.getElementById('aiApiUrl').value.trim(),
                 model: document.getElementById('aiModel').value.trim(),
                 api_key: document.getElementById('aiApiKey').value.trim(),
