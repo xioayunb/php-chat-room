@@ -7,23 +7,62 @@
 
 session_start();
 
-// 配置文件
-$messages_buffer_file = "messages.json";
-$users_file = "users.json";
-$banned_file = "banned.json";
-$email_config_file = "email_config.json";
-$email_codes_file = "email_codes.json";
-$db_config_file = "db_config.json";
-$filter_file = "filter.json";
-$typing_file = "typing.json";
+// 配置文件（数据统一放入 data/ 目录，后缀强制为 .php：
+// 文件内容以 PHP 自毁标记开头，任何主机直接 HTTP 访问都只会执行 exit，
+// 配合 data/.htaccess 构成双保险，杜绝聊天记录/密码等被下载）
+$data_dir = __DIR__ . "/data";
+$messages_buffer_file = $data_dir . "/messages.json.php";
+$users_file = $data_dir . "/users.json.php";
+$banned_file = $data_dir . "/banned.json.php";
+$email_config_file = $data_dir . "/email_config.json.php";
+$email_codes_file = $data_dir . "/email_codes.json.php";
+$db_config_file = $data_dir . "/db_config.json.php";
+$filter_file = $data_dir . "/filter.json.php";
+$typing_file = $data_dir . "/typing.json.php";
+$lock_file = $data_dir . "/chat.lock";
 $messages_buffer_size = 200;
 $admin_password = "admin123"; // 建议修改此密码
 $recall_timeout = 120; // 消息撤回时限（秒）
 
-// 创建必要文件
+// ---------- 数据目录初始化与旧版数据迁移 ----------
+if (!is_dir($data_dir)) @mkdir($data_dir, 0755, true);
+
+// 写入 data/.htaccess：拒绝一切 HTTP 访问（Apache 环境第二道防线）
+$htaccess_content = "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n";
+if (!file_exists($data_dir . "/.htaccess")) @file_put_contents($data_dir . "/.htaccess", $htaccess_content);
+// 根目录 .htaccess：兜底保护旧版遗留的根目录 json 文件
+if (!file_exists(__DIR__ . "/.htaccess")) @file_put_contents(__DIR__ . "/.htaccess", $htaccess_content);
+
+// 旧版（根目录裸 json / data 目录裸 json）迁移到 data/*.json.php
+foreach ([
+    "messages.json" => $messages_buffer_file,
+    "users.json" => $users_file,
+    "banned.json" => $banned_file,
+    "email_config.json" => $email_config_file,
+    "email_codes.json" => $email_codes_file,
+    "db_config.json" => $db_config_file,
+    "filter.json" => $filter_file,
+    "typing.json" => $typing_file,
+] as $legacy => $newpath) {
+    foreach ([__DIR__ . "/" . $legacy, __DIR__ . "/data/" . $legacy] as $legacy_path) {
+        if (file_exists($legacy_path) && !file_exists($newpath)) {
+            $raw = @file_get_contents($legacy_path);
+            if (strncmp((string)$raw, '<?php', 5) === 0) {
+                $pos = strpos((string)$raw, '?>');
+                $raw = ($pos !== false) ? substr($raw, $pos + 2) : '';
+            }
+            $decoded = json_decode(trim((string)$raw), true);
+            if (is_array($decoded)) write_json($newpath, $decoded);
+            // 旧文件立即失效化（防止未配置 htaccess 的主机泄露）
+            @file_put_contents($legacy_path, "<?php exit;?>{}");
+        }
+    }
+}
+
+// 创建必要文件（带自毁头，见 write_json）
 foreach ([$messages_buffer_file, $users_file, $banned_file, $email_config_file, $email_codes_file, $db_config_file, $filter_file, $typing_file] as $file) {
     if (!file_exists($file)) {
-        file_put_contents($file, json_encode([]));
+        write_json($file, []);
     }
 }
 
@@ -88,9 +127,12 @@ function db_init_tables() {
 function db_get_messages($limit = 200) {
     $db = db_connect();
     if (!$db) return [];
-    $stmt = $db->prepare("SELECT msg_id as id, time, name, content, type, ip FROM chat_messages ORDER BY msg_id ASC LIMIT ?");
+    // 安全修复：取最新 limit 条（DESC）后再按 id 正序返回；
+    // 原来的 ASC LIMIT 会永远返回最早的 200 条，消息一多聊天室就"冻结"。
+    $stmt = $db->prepare("SELECT msg_id as id, time, name, content, type, ip FROM chat_messages ORDER BY msg_id DESC LIMIT ?");
     $stmt->execute([$limit]);
-    return $stmt->fetchAll();
+    $rows = $stmt->fetchAll();
+    return array_reverse($rows);
 }
 
 function db_add_message($msg) {
@@ -105,6 +147,13 @@ function db_delete_message($msg_id) {
     $db = db_connect();
     if (!$db) return false;
     $stmt = $db->prepare("DELETE FROM chat_messages WHERE msg_id = ?");
+    return $stmt->execute([$msg_id]);
+}
+
+function db_recall_message($msg_id) {
+    $db = db_connect();
+    if (!$db) return false;
+    $stmt = $db->prepare("UPDATE chat_messages SET type = 'recalled', content = '' WHERE msg_id = ?");
     return $stmt->execute([$msg_id]);
 }
 
@@ -218,6 +267,26 @@ function clear_all_messages() {
     }
 }
 
+// 修复：撤回改为「标记为已撤回」而非硬删除，与前端渲染逻辑一致
+function mark_message_recalled($msg_id) {
+    global $messages_buffer_file, $db_enabled;
+    $messages = read_json($messages_buffer_file);
+    $changed = false;
+    foreach ($messages as &$m) {
+        if ((int)$m['id'] === (int)$msg_id) {
+            $m['type'] = 'recalled';
+            $m['content'] = '';
+            $changed = true;
+        }
+    }
+    unset($m);
+    if ($changed) write_json($messages_buffer_file, $messages);
+    if ($db_enabled) {
+        db_recall_message((int)$msg_id);
+    }
+    return $changed;
+}
+
 function get_users() {
     global $users_file, $db_enabled;
     $users = read_json($users_file);
@@ -238,6 +307,11 @@ function get_users() {
 function save_user($ip, $user) {
     global $users_file, $db_enabled;
     $users = read_json($users_file);
+    // 安全修复：清理超过7天不活跃的用户，防止文件无限膨胀
+    $now = time();
+    foreach ($users as $k => $u) {
+        if (($now - (int)$u['last_active']) > 604800) unset($users[$k]);
+    }
     $users[$ip] = $user;
     write_json($users_file, $users);
     if ($db_enabled) {
@@ -313,19 +387,47 @@ function set_typing($name) {
     write_json($typing_file, $typing);
 }
 
-// 读取数据
+// 读取数据（容错：剥离自毁头、损坏时返回空数组而不是 null）
 function read_json($file) {
-    $data = file_get_contents($file);
-    return $data ? json_decode($data, true) : [];
+    if (!is_file($file)) return [];
+    $raw = @file_get_contents($file);
+    if ($raw === false || $raw === '') return [];
+    if (strncmp($raw, '<?php', 5) === 0) {
+        $pos = strpos($raw, '?>');
+        $raw = ($pos !== false) ? substr($raw, $pos + 2) : '';
+    }
+    $data = json_decode(trim($raw), true);
+    return is_array($data) ? $data : [];
 }
 
+// 写入数据：文件头部写入「PHP 自毁标记」（一行 exit 代码）——
+// 即使 .htaccess 失效，直接用 URL 访问该文件也只会执行 exit，内容无法被读取；
+// 写入采用「临时文件 + rename」保证原子性，杜绝并发下读到半截 JSON。
 function write_json($file, $data) {
-    $fp = fopen($file, "w");
-    if (flock($fp, LOCK_EX)) {
-        fwrite($fp, json_encode($data, JSON_UNESCAPED_UNICODE));
-        flock($fp, LOCK_UN);
+    $json = "<?php exit;?>" . json_encode($data, JSON_UNESCAPED_UNICODE);
+    $tmp = $file . ".tmp." . getmypid();
+    if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
+        @unlink($tmp);
+        return false;
     }
-    fclose($fp);
+    return rename($tmp, $file);
+}
+
+// ---------- 全局互斥锁（消除发消息/撤回/清空的读改写竞争） ----------
+function acquire_lock($timeout = 5) {
+    global $lock_file;
+    $fp = @fopen($lock_file, "c");
+    if (!$fp) return null;
+    $deadline = microtime(true) + $timeout;
+    while (!flock($fp, LOCK_EX | LOCK_NB)) {
+        if (microtime(true) > $deadline) { fclose($fp); return null; }
+        usleep(50000);
+    }
+    return $fp;
+}
+
+function release_lock($fp) {
+    if ($fp) { flock($fp, LOCK_UN); fclose($fp); }
 }
 
 // 检查是否被禁言
@@ -335,10 +437,10 @@ function is_banned($ip) {
 }
 
 // 获取用户IP
+// 安全修复：不再信任 X-Forwarded-For / Client-IP 等可伪造请求头，
+// 否则攻击者可随意换头绕过禁言、甚至伪造他人 IP 撤回对方消息。
 function get_user_ip() {
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) return $_SERVER['HTTP_CLIENT_IP'];
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) return $_SERVER['HTTP_X_FORWARDED_FOR'];
-    return $_SERVER['REMOTE_ADDR'];
+    return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
 }
 
 // 发送邮件函数
@@ -409,15 +511,29 @@ function send_email($to, $subject, $body) {
 }
 
 function generate_code() {
-    return str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
+    // 安全修复：使用密码学安全随机数（PHP7+），旧环境回退 mt_rand
+    if (function_exists('random_int')) {
+        return (string)random_int(100000, 999999);
+    }
+    return str_pad(mt_rand(0, 999999), 6, '0', STR_PAD_LEFT);
 }
 
 // 处理API请求
 if (isset($_GET['action'])) {
     header('Content-Type: application/json');
     
+    // 安全修复：私聊消息改为服务端过滤——非收发双方的客户端根本拿不到消息内容
     if ($_GET['action'] === 'get_messages') {
-        $messages = get_messages();
+        $my_name = isset($_GET['name']) ? trim((string)$_GET['name']) : '';
+        $my_name = mb_substr($my_name, 0, 20);
+        $all = get_messages();
+        $messages = [];
+        foreach ($all as $m) {
+            if (empty($m['target'])) { $messages[] = $m; continue; }
+            if ($my_name !== '' && ($m['target'] === $my_name || (isset($m['name']) && $m['name'] === $my_name))) {
+                $messages[] = $m;
+            }
+        }
         echo json_encode($messages);
         exit;
     }
@@ -440,7 +556,12 @@ if (isset($_GET['action'])) {
     }
     
     if ($_GET['action'] === 'get_email_config') {
+        // 安全修复：完整配置仅管理员可见，普通用户只返回 enabled 开关
         $config = read_json($email_config_file);
+        if (empty($_SESSION['is_admin'])) {
+            echo json_encode(['enabled' => !empty($config['enabled'])]);
+            exit;
+        }
         echo json_encode([
             'enabled' => !empty($config['enabled']),
             'smtp_host' => $config['smtp_host'] ?? '',
@@ -489,12 +610,24 @@ if (isset($_GET['action'])) {
             exit;
         }
         
-        $code = generate_code();
+        // 安全修复：同一邮箱60秒内只能发一次，防止被滥用轰炸邮箱
         $codes = read_json($email_codes_file);
+        $now = time();
+        if (isset($codes[$email]['time']) && ($now - (int)$codes[$email]['time']) < 60) {
+            echo json_encode(['success' => false, 'error' => '发送太频繁，请1分钟后再试']);
+            exit;
+        }
+        // 清理1小时前的过期记录，防止文件无限膨胀
+        foreach ($codes as $k => $rec) {
+            if (($now - (int)$rec['time']) > 3600) unset($codes[$k]);
+        }
+        
+        $code = generate_code();
         $codes[$email] = [
             'code' => $code,
-            'time' => time(),
-            'used' => false
+            'time' => $now,
+            'used' => false,
+            'fails' => 0
         ];
         write_json($email_codes_file, $codes);
         
@@ -534,6 +667,15 @@ if (isset($_GET['action'])) {
         }
         
         if ($record['code'] !== $code) {
+            // 安全修复：错误次数限制，防止暴力枚举6位验证码
+            $codes[$email]['fails'] = (int)$record['fails'] + 1;
+            if ($codes[$email]['fails'] >= 5) {
+                unset($codes[$email]);
+                write_json($email_codes_file, $codes);
+                echo json_encode(['success' => false, 'error' => '错误次数过多，请重新发送验证码']);
+                exit;
+            }
+            write_json($email_codes_file, $codes);
             echo json_encode(['success' => false, 'error' => '验证码错误']);
             exit;
         }
@@ -548,18 +690,27 @@ if (isset($_GET['action'])) {
     
     if ($_GET['action'] === 'send_message' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $input = json_decode(file_get_contents('php://input'), true);
-        $name = isset($input['name']) ? trim($input['name']) : '';
-        $content = isset($input['content']) ? trim($input['content']) : '';
-        $type = isset($input['type']) ? $input['type'] : 'text';
+        $name = isset($input['name']) ? trim((string)$input['name']) : '';
+        $content = isset($input['content']) ? trim((string)$input['content']) : '';
+        $type = isset($input['type']) ? (string)$input['type'] : 'text';
         $ip = get_user_ip();
 
-        if (empty($name) || empty($content)) {
+        if ($name === '' || $content === '') {
             echo json_encode(['success' => false, 'error' => '名称和消息不能为空']);
             exit;
         }
-
         if (is_banned($ip)) {
             echo json_encode(['success' => false, 'error' => '你已被禁言']);
+            exit;
+        }
+
+        // 安全修复：输入校验——昵称限20字、内容去控制字符并限长、类型白名单
+        $name = mb_substr(preg_replace('/[\x00-\x1F\x7F]/u', '', $name), 0, 20);
+        $content = mb_substr(preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $content), 0, 3000);
+        if (!in_array($type, ['text', 'image'], true)) $type = 'text';
+        if ($type === 'image' && !preg_match('#^https?://#i', $content)) $type = 'text';
+        if ($name === '' || $content === '') {
+            echo json_encode(['success' => false, 'error' => '内容不合法']);
             exit;
         }
 
@@ -568,32 +719,40 @@ if (isset($_GET['action'])) {
 
         // 检测私聊 @用户名
         $target = '';
-        if (preg_match('/^@(\S+)\s/', $content, $matches)) {
+        if (preg_match('/^@(\S+)\s/u', $content, $matches)) {
             $target = $matches[1];
         }
 
-        $users = get_users();
-        $users[$ip] = [
-            'name' => $name,
-            'last_active' => time(),
-            'join_time' => isset($users[$ip]) ? $users[$ip]['join_time'] : time(),
-            'is_admin' => isset($users[$ip]) ? $users[$ip]['is_admin'] : false
-        ];
-        save_user($ip, $users[$ip]);
+        // 安全修复：互斥锁保护「读用户→写用户→算ID→写消息」整个流程，
+        // 并发发送不再互相覆盖；ID 取 max(末尾+1, 当前时间戳)，
+        // 清空后也不会与数据库历史消息撞号（旧逻辑从0重来会覆盖历史）。
+        $lock = acquire_lock();
+        do {
+            $users = get_users();
+            $users[$ip] = [
+                'name' => $name,
+                'last_active' => time(),
+                'join_time' => isset($users[$ip]) ? $users[$ip]['join_time'] : time(),
+                'is_admin' => isset($users[$ip]) ? $users[$ip]['is_admin'] : false
+            ];
+            save_user($ip, $users[$ip]);
 
-        $messages = get_messages();
-        $next_id = count($messages) > 0 ? $messages[count($messages) - 1]['id'] + 1 : 0;
-        $msg = [
-            'id' => $next_id,
-            'time' => time(),
-            'name' => $name,
-            'content' => $content,
-            'type' => $type,
-            'ip' => $ip,
-            'target' => $target
-        ];
+            $messages = get_messages();
+            $last_id = count($messages) > 0 ? (int)$messages[count($messages) - 1]['id'] : 0;
+            $next_id = max($last_id + 1, time());
+            $msg = [
+                'id' => $next_id,
+                'time' => time(),
+                'name' => $name,
+                'content' => $content,
+                'type' => $type,
+                'ip' => $ip,
+                'target' => $target
+            ];
+            save_message($msg);
+        } while (false);
+        release_lock($lock);
 
-        save_message($msg);
         echo json_encode(['success' => true]);
         exit;
     }
@@ -619,9 +778,18 @@ if (isset($_GET['action'])) {
     
     if ($_GET['action'] === 'admin_login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $input = json_decode(file_get_contents('php://input'), true);
-        $password = isset($input['password']) ? $input['password'] : '';
+        $password = isset($input['password']) ? (string)$input['password'] : '';
+
+        // 安全修复：连续失败5次锁定10分钟，防止暴力破解默认密码
+        $fails = isset($_SESSION['login_fails']) ? (int)$_SESSION['login_fails'] : 0;
+        $lock_until = isset($_SESSION['login_lock_until']) ? (int)$_SESSION['login_lock_until'] : 0;
+        if ($lock_until > time()) {
+            echo json_encode(['success' => false, 'error' => '尝试次数过多，请 ' . ceil(($lock_until - time()) / 60) . ' 分钟后再试']);
+            exit;
+        }
 
         if ($password === $admin_password) {
+            unset($_SESSION['login_fails'], $_SESSION['login_lock_until']);
             $ip = get_user_ip();
             $users = get_users();
             if (isset($users[$ip])) {
@@ -631,7 +799,15 @@ if (isset($_GET['action'])) {
             $_SESSION['is_admin'] = true;
             echo json_encode(['success' => true]);
         } else {
-            echo json_encode(['success' => false, 'error' => '密码错误']);
+            $fails++;
+            usleep(500000); // 每次失败拖慢0.5秒
+            $_SESSION['login_fails'] = $fails;
+            if ($fails >= 5) {
+                $_SESSION['login_lock_until'] = time() + 600;
+                echo json_encode(['success' => false, 'error' => '密码错误次数过多，已锁定10分钟']);
+            } else {
+                echo json_encode(['success' => false, 'error' => '密码错误']);
+            }
         }
         exit;
     }
@@ -661,6 +837,11 @@ if (isset($_GET['action'])) {
 
     // ========== 数据库配置 API ==========
     if ($_GET['action'] === 'get_db_config') {
+        // 安全修复：数据库配置仅管理员可见
+        if (empty($_SESSION['is_admin'])) {
+            echo json_encode(['enabled' => $db_enabled]);
+            exit;
+        }
         $config = read_json($db_config_file);
         echo json_encode([
             'enabled' => !empty($config['enabled']),
@@ -767,14 +948,23 @@ if (isset($_GET['action'])) {
 
     // ========== 消息搜索 ==========
     if ($_GET['action'] === 'search_messages') {
-        $keyword = isset($_GET['keyword']) ? trim($_GET['keyword']) : '';
+        $keyword = isset($_GET['keyword']) ? trim((string)$_GET['keyword']) : '';
         if (empty($keyword)) {
             echo json_encode([]);
             exit;
         }
-        $messages = get_messages();
+        // 安全修复：搜索结果同样要做私聊过滤，防止借搜索枚举他人私聊内容
+        $my_name = isset($_GET['name']) ? mb_substr(trim((string)$_GET['name']), 0, 20) : '';
+        $all = get_messages();
         $results = [];
-        foreach ($messages as $msg) {
+        foreach ($all as $msg) {
+            if (!empty($msg['target']) && $my_name !== '' &&
+                $msg['target'] !== $my_name && (isset($msg['name']) && $msg['name'] !== $my_name)) {
+                continue;
+            }
+            if (!empty($msg['target']) && $my_name === '') {
+                continue;
+            }
             if (mb_stripos($msg['content'], $keyword) !== false || mb_stripos($msg['name'], $keyword) !== false) {
                 $results[] = $msg;
             }
@@ -789,28 +979,34 @@ if (isset($_GET['action'])) {
         $msg_id = isset($input['id']) ? intval($input['id']) : -1;
         $ip = get_user_ip();
 
+        $lock = acquire_lock();
         $messages = get_messages();
         $found = null;
         foreach ($messages as $msg) {
-            if ($msg['id'] === $msg_id) {
+            // 修复：DB 模式下 PDO 可能返回字符串 ID，统一转 int 再比较
+            if ((int)$msg['id'] === $msg_id) {
                 $found = $msg;
                 break;
             }
         }
         if (!$found) {
+            release_lock($lock);
             echo json_encode(['success' => false, 'error' => '消息不存在']);
             exit;
         }
         if ($found['ip'] !== $ip && empty($_SESSION['is_admin'])) {
+            release_lock($lock);
             echo json_encode(['success' => false, 'error' => '只能撤回自己的消息']);
             exit;
         }
-        if (time() - $found['time'] > $GLOBALS['recall_timeout'] && empty($_SESSION['is_admin'])) {
+        if (time() - (int)$found['time'] > $GLOBALS['recall_timeout'] && empty($_SESSION['is_admin'])) {
+            release_lock($lock);
             echo json_encode(['success' => false, 'error' => '超过撤回时限（2分钟）']);
             exit;
         }
 
-        delete_message_by_id($msg_id);
+        mark_message_recalled($msg_id);
+        release_lock($lock);
         echo json_encode(['success' => true, 'recalled_name' => $found['name']]);
         exit;
     }
@@ -2454,7 +2650,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         }
 
         async function pollMessages() {
-            const response = await fetch('?action=get_messages', { cache: 'no-cache' });
+            const response = await fetch('?action=get_messages&name=' + encodeURIComponent(userName), { cache: 'no-cache' });
             const msgs = await response.json();
             if (msgs.length !== messages.length ||
                 (msgs.length > 0 && messages.length > 0 && msgs[msgs.length-1].id !== messages[messages.length-1].id)) {
@@ -2601,7 +2797,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 return;
             }
             searchMode = true;
-            const response = await fetch(`?action=search_messages&keyword=${encodeURIComponent(keyword)}`);
+            const response = await fetch(`?action=search_messages&keyword=${encodeURIComponent(keyword)}&name=${encodeURIComponent(userName)}`);
             const results = await response.json();
             window._searchResults = results;
             document.getElementById('searchCount').textContent = `找到 ${results.length} 条`;
@@ -2683,7 +2879,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
         // Override pollMessages to add notification
         const _originalPollMessages = pollMessages;
         pollMessages = async function() {
-            const response = await fetch('?action=get_messages', { cache: 'no-cache' });
+            const response = await fetch('?action=get_messages&name=' + encodeURIComponent(userName), { cache: 'no-cache' });
             const msgs = await response.json();
             const newMsgs = msgs.length > messages.length ? msgs.slice(messages.length) : [];
             if (newMsgs.length > 0 && messages.length > 0) {
