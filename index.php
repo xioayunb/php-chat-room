@@ -307,11 +307,6 @@ function get_users() {
 function save_user($ip, $user) {
     global $users_file, $db_enabled;
     $users = read_json($users_file);
-    // 安全修复：清理超过7天不活跃的用户，防止文件无限膨胀
-    $now = time();
-    foreach ($users as $k => $u) {
-        if (($now - (int)$u['last_active']) > 604800) unset($users[$k]);
-    }
     $users[$ip] = $user;
     write_json($users_file, $users);
     if ($db_enabled) {
