@@ -19,6 +19,8 @@ $email_codes_file = $data_dir . "/email_codes.json.php";
 $db_config_file = $data_dir . "/db_config.json.php";
 $filter_file = $data_dir . "/filter.json.php";
 $typing_file = $data_dir . "/typing.json.php";
+$ai_config_file = $data_dir . "/ai_config.json.php";
+$ai_state_file = $data_dir . "/ai_state.json.php";
 $lock_file = $data_dir . "/chat.lock";
 $messages_buffer_size = 200;
 $admin_password = "admin123"; // 建议修改此密码
@@ -60,7 +62,7 @@ foreach ([
 }
 
 // 创建必要文件（带自毁头，见 write_json）
-foreach ([$messages_buffer_file, $users_file, $banned_file, $email_config_file, $email_codes_file, $db_config_file, $filter_file, $typing_file] as $file) {
+foreach ([$messages_buffer_file, $users_file, $banned_file, $email_config_file, $email_codes_file, $db_config_file, $filter_file, $typing_file, $ai_config_file, $ai_state_file] as $file) {
     if (!file_exists($file)) {
         write_json($file, []);
     }
@@ -361,6 +363,136 @@ function filter_content($content) {
     return $content;
 }
 
+// ========== AI 自动回复 ==========
+// 调用 OpenAI 兼容接口（DeepSeek/OpenRouter/本地 vLLM 等均适用）
+function ai_call_api($config, $context_msgs, $test_prompt = null) {
+    if (empty($config['api_url']) || empty($config['model'])) {
+        return ['success' => false, 'error' => 'API地址或模型未配置'];
+    }
+    $ai_name = trim((string)($config['ai_name'] ?? '')) ?: 'AI助手';
+    $persona = trim((string)($config['persona'] ?? ''));
+    $system = "你是网页聊天室里的一名成员，名字叫「{$ai_name}」。";
+    if ($persona !== '') {
+        $system .= "你的人设：{$persona}";
+    } else {
+        $system .= "你友好、幽默、乐于助人。";
+    }
+    $system .= "\n规则：用简体中文口语化短句回复，一般不超过80字；只输出要发送的聊天内容本身，不要加引号、前缀或解释。";
+
+    $messages = [['role' => 'system', 'content' => $system]];
+    if ($test_prompt !== null) {
+        $messages[] = ['role' => 'user', 'content' => $test_prompt];
+    } else {
+        foreach ($context_msgs as $m) {
+            if (!empty($m['target']) || in_array($m['type'] ?? '', ['recalled'], true)) continue;
+            $is_ai = ((string)$m['name'] === $ai_name);
+            $text = ($is_ai ? '' : (string)$m['name'] . '：') . (string)$m['content'];
+            $messages[] = ['role' => $is_ai ? 'assistant' : 'user', 'content' => $text];
+        }
+        if (count($messages) < 2) return null; // 没有可回的内容
+    }
+
+    $body = json_encode([
+        'model' => (string)$config['model'],
+        'messages' => $messages,
+        'max_tokens' => 300,
+        'temperature' => 0.9,
+    ], JSON_UNESCAPED_UNICODE);
+
+    $headers = "Content-Type: application/json\r\n";
+    if (!empty($config['api_key'])) {
+        $headers .= "Authorization: Bearer " . $config['api_key'] . "\r\n";
+    }
+    $ctx = stream_context_create(['http' => [
+        'method' => 'POST',
+        'header' => $headers,
+        'content' => $body,
+        'timeout' => 30,
+        'ignore_errors' => true,
+    ]]);
+
+    $raw = @file_get_contents((string)$config['api_url'], false, $ctx);
+    if ($raw === false) return ['success' => false, 'error' => 'AI接口连接失败'];
+    $data = json_decode($raw, true);
+    $content = $data['choices'][0]['message']['content'] ?? null;
+    if (!is_string($content) || $content === '') {
+        $err = $data['error']['message'] ?? ('HTTP响应异常: ' . mb_substr(strip_tags($raw), 0, 120));
+        return ['success' => false, 'error' => is_string($err) ? mb_substr($err, 0, 200) : '未知错误'];
+    }
+    // 去掉可能出现的包裹引号并限长
+    // 注意：必须用 UTF-8 安全的正则清理，不能用 trim()——
+    // trim 按字节工作，字符集含中文引号时会砍坏多字节字符尾部，
+    // 产生非法 UTF-8，进而导致 json_encode 失败、整个数据文件被写坏。
+    $content = preg_replace('/^[\s"“”]+|[\s"“”]+$/u', '', $content);
+    $content = mb_substr($content, 0, 500);
+    return ['success' => true, 'reply' => $content];
+}
+
+// 轮询驱动：检查新消息并在符合触发条件时生成 AI 回复
+function ai_maybe_reply() {
+    global $ai_config_file, $ai_state_file;
+    $config = read_json($ai_config_file);
+    if (empty($config['enabled'])) return;
+
+    $lock = acquire_lock(3);
+    if (!$lock) return; // 另一个轮询正在生成，跳过本轮
+
+    do {
+        $state = read_json($ai_state_file);
+        $last_id = (int)($state['last_handled_id'] ?? -1);
+        $ai_name = trim((string)($config['ai_name'] ?? '')) ?: 'AI助手';
+
+        $all = get_messages();
+        $new_human = [];
+        $newest_id = $last_id;
+        foreach ($all as $m) {
+            $mid = (int)$m['id'];
+            if ($mid <= $last_id) continue;
+            $newest_id = max($newest_id, $mid);
+            if (($m['type'] ?? '') !== 'text') continue;
+            if (!empty($m['target'])) continue;
+            if ((string)$m['name'] === $ai_name) continue;
+            $new_human[] = $m;
+        }
+        if (empty($new_human)) break;
+
+        $latest = $new_human[count($new_human) - 1];
+        $mode = ($config['trigger_mode'] ?? 'mention');
+        $mentioned = false;
+        foreach ($new_human as $m) {
+            if (mb_stripos((string)$m['content'], '@' . $ai_name) !== false) { $mentioned = true; break; }
+        }
+
+        // 无论是否回复，都推进水位线，避免重复处理旧消息
+        $ctx_count = max(2, min(30, (int)($config['context_count'] ?? 10)));
+        $context = array_slice(array_values(array_filter($all, function ($m) {
+            return ($m['type'] ?? '') === 'text' && empty($m['target']);
+        })), -$ctx_count);
+
+        $should_reply = ($mode === 'all') || $mentioned;
+        if (!$should_reply) {
+            write_json($ai_state_file, ['last_handled_id' => $newest_id]);
+            break;
+        }
+
+        $result = ai_call_api($config, $context);
+        if (!empty($result['success'])) {
+            $max_existing = 0;
+            foreach ($all as $m) $max_existing = max($max_existing, (int)$m['id']);
+            save_message([
+                'id' => max($max_existing + 1, time()),
+                'time' => time(),
+                'name' => $ai_name,
+                'content' => $result['reply'],
+                'type' => 'text',
+                'ip' => 'AI',
+            ]);
+        }
+        write_json($ai_state_file, ['last_handled_id' => $newest_id]);
+    } while (false);
+    release_lock($lock);
+}
+
 // 打字状态
 function get_typing_users() {
     global $typing_file;
@@ -399,7 +531,14 @@ function read_json($file) {
 // 即使 .htaccess 失效，直接用 URL 访问该文件也只会执行 exit，内容无法被读取；
 // 写入采用「临时文件 + rename」保证原子性，杜绝并发下读到半截 JSON。
 function write_json($file, $data) {
-    $json = "<?php exit;?>" . json_encode($data, JSON_UNESCAPED_UNICODE);
+    // 防御：json_encode 失败（如个别数据非法 UTF-8）时降级转义，
+    // 绝不允许因单条脏数据把整个数据文件清空
+    $encoded = json_encode($data, JSON_UNESCAPED_UNICODE);
+    if ($encoded === false) {
+        $encoded = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($encoded === false) $encoded = '[]';
+    }
+    $json = "<?php exit;?>" . $encoded;
     $tmp = $file . ".tmp." . getmypid();
     if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
         @unlink($tmp);
@@ -519,6 +658,7 @@ if (isset($_GET['action'])) {
     
     // 安全修复：私聊功能已移除；历史遗留的带 target 私聊消息对所有人不可见，防止泄露
     if ($_GET['action'] === 'get_messages') {
+        ai_maybe_reply(); // AI 回复引擎（内部自带锁与水位线）
         $all = get_messages();
         $messages = [];
         foreach ($all as $m) {
@@ -1032,12 +1172,70 @@ if (isset($_GET['action'])) {
         exit;
     }
 
+    // ========== AI 回复配置 ==========
+    if ($_GET['action'] === 'get_ai_config') {
+        if (empty($_SESSION['is_admin'])) {
+            echo json_encode(['success' => false, 'error' => '无权限']);
+            exit;
+        }
+        $config = read_json($ai_config_file);
+        echo json_encode([
+            'enabled' => !empty($config['enabled']),
+            'api_url' => $config['api_url'] ?? '',
+            'model' => $config['model'] ?? '',
+            'has_key' => !empty($config['api_key']), // 密钥不回传，只告知是否已设置
+            'ai_name' => $config['ai_name'] ?? 'AI助手',
+            'persona' => $config['persona'] ?? '',
+            'trigger_mode' => $config['trigger_mode'] ?? 'mention',
+            'context_count' => (int)($config['context_count'] ?? 10)
+        ]);
+        exit;
+    }
+
+    if ($_GET['action'] === 'save_ai_config' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (empty($_SESSION['is_admin'])) {
+            echo json_encode(['success' => false, 'error' => '无权限']);
+            exit;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $old = read_json($ai_config_file);
+        $config = [
+            'enabled' => !empty($input['enabled']),
+            'api_url' => trim((string)($input['api_url'] ?? '')),
+            'model' => trim((string)($input['model'] ?? '')),
+            // 密钥留空表示沿用旧值
+            'api_key' => (isset($input['api_key']) && trim((string)$input['api_key']) !== '')
+                ? trim((string)$input['api_key'])
+                : ($old['api_key'] ?? ''),
+            'ai_name' => mb_substr(trim((string)($input['ai_name'] ?? '')) ?: 'AI助手', 0, 20),
+            'persona' => mb_substr(trim((string)($input['persona'] ?? '')), 0, 2000),
+            'trigger_mode' => in_array($input['trigger_mode'] ?? '', ['mention', 'all'], true) ? $input['trigger_mode'] : 'mention',
+            'context_count' => max(2, min(30, (int)($input['context_count'] ?? 10)))
+        ];
+        write_json($ai_config_file, $config);
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    if ($_GET['action'] === 'test_ai' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (empty($_SESSION['is_admin'])) {
+            echo json_encode(['success' => false, 'error' => '无权限']);
+            exit;
+        }
+        $config = read_json($ai_config_file);
+        $result = ai_call_api($config, [], '你好，请用一两句话向大家打个招呼并介绍你自己');
+        echo json_encode($result);
+        exit;
+    }
+
     exit;
 }
 
 $default_name = isset($_SESSION['chat_name']) ? $_SESSION['chat_name'] : '用户' . rand(1000, 9999);
 $email_config = read_json($email_config_file);
 $email_enabled = !empty($email_config['enabled']);
+$ai_page_cfg = read_json($ai_config_file);
+$ai_bot_name = trim((string)($ai_page_cfg['ai_name'] ?? '')) ?: 'AI助手';
 $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email'] : '';
 ?>
 <!DOCTYPE html>
@@ -2212,6 +2410,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 <button class="btn-secondary" onclick="toggleSettings()" style="margin-bottom:8px;">邮箱设置</button>
                 <button class="btn-secondary" onclick="toggleDbSettings()" style="margin-bottom:8px;">数据库设置</button>
                 <button class="btn-secondary" onclick="toggleFilterSettings()" style="margin-bottom:8px;">敏感词过滤</button>
+                <button class="btn-secondary" onclick="toggleAiSettings()" style="margin-bottom:8px;">AI 回复设置</button>
 
                 <div class="settings-panel" id="settingsPanel">
                     <div class="toggle-row">
@@ -2293,6 +2492,49 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
 
                     <button class="btn-primary" onclick="saveFilterConfig()">保存配置</button>
                     <p id="filterStatus" style="font-size:0.78em;color:var(--text-muted);margin-top:10px;"></p>
+                </div>
+
+                <div class="settings-panel" id="aiSettingsPanel">
+                    <div class="toggle-row">
+                        <input type="checkbox" id="aiEnabled">
+                        <label>启用 AI 自动回复</label>
+                    </div>
+
+                    <div class="form-group">
+                        <label>API 地址（OpenAI 兼容 /chat/completions）</label>
+                        <input type="text" id="aiApiUrl" placeholder="https://api.deepseek.com/v1/chat/completions">
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="aiModel" placeholder="deepseek-chat">
+                    </div>
+                    <div class="form-group">
+                        <label>API 密钥（留空表示不修改）</label>
+                        <input type="password" id="aiApiKey" placeholder="">
+                    </div>
+                    <div class="form-group">
+                        <label>AI 昵称（聊天室里显示的名字，@它 可点名提问）</label>
+                        <input type="text" id="aiName" value="AI助手" maxlength="20">
+                    </div>
+                    <div class="form-group">
+                        <label>AI 人设（性格/背景/说话风格，留空用默认友好助手）</label>
+                        <textarea id="aiPersona" rows="4" style="width:100%;background:rgba(255,255,255,0.03);border:1px solid var(--border-glass);border-radius:var(--radius-sm);padding:11px 16px;font-size:0.88em;font-family:var(--font-body);color:var(--text-primary);outline:none;resize:vertical;" placeholder="例如：你是一只傲娇的猫娘，说话带喵~"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>触发方式</label>
+                        <select id="aiTriggerMode">
+                            <option value="mention">被 @ 时才回复</option>
+                            <option value="all">每条新消息都回复</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>携带上下文条数（2-30）</label>
+                        <input type="number" id="aiContextCount" value="10" min="2" max="30">
+                    </div>
+
+                    <button class="btn-primary" onclick="saveAiConfig()">保存配置</button>
+                    <button class="btn-secondary" onclick="testAi()">测试 AI 连通性</button>
+                    <p id="aiStatus" style="font-size:0.78em;color:var(--text-muted);margin-top:10px;"></p>
                 </div>
             </div>
         </div>
@@ -2452,6 +2694,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 loadEmailConfig();
                 loadDbConfig();
                 loadFilterConfig();
+                loadAiConfig();
             }
         }
 
@@ -2669,7 +2912,9 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 }
 
                 const time = new Date(msg.time * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-                const badge = isAdminMsg ? '<span class="admin-badge">管理</span>' : '';
+                const isAiMsg = msg.name === AI_BOT_NAME;
+                const badge = isAdminMsg ? '<span class="admin-badge">管理</span>'
+                    : (isAiMsg ? '<span class="admin-badge" style="background:var(--neon-magenta);">AI</span>' : '');
                 const delBtn = isAdmin ? `<button class="delete-btn" onclick="deleteMessage(${msg.id})">×</button>` : '';
                 const recallBtn = (isOwn && !isRecalled && msg.type !== 'image') ? `<button class="recall-btn" onclick="recallMessage(${msg.id})">撤回</button>` : '';
                 li.innerHTML = `<div class="message-header"><span class="message-name">${escapeHtml(msg.name)}${badge}</span><span class="message-time">${time}${recallBtn}${delBtn}</span></div><div class="message-content">${content}</div>`;
@@ -2868,6 +3113,70 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 if (!searchMode) renderMessages();
             }
         };
+
+        // ========== AI 回复配置 ==========
+        const AI_BOT_NAME = <?php echo json_encode($ai_bot_name, JSON_UNESCAPED_UNICODE); ?>;
+        function toggleAiSettings() { document.getElementById('aiSettingsPanel').classList.toggle('show'); }
+
+        async function loadAiConfig() {
+            const response = await fetch('?action=get_ai_config');
+            const config = await response.json();
+            if (config.success === false) return;
+            document.getElementById('aiEnabled').checked = config.enabled;
+            document.getElementById('aiApiUrl').value = config.api_url;
+            document.getElementById('aiModel').value = config.model;
+            document.getElementById('aiApiKey').placeholder = config.has_key ? '已设置，留空保持不变' : '';
+            document.getElementById('aiName').value = config.ai_name;
+            document.getElementById('aiPersona').value = config.persona;
+            document.getElementById('aiTriggerMode').value = config.trigger_mode;
+            document.getElementById('aiContextCount').value = config.context_count;
+        }
+
+        async function saveAiConfig() {
+            const config = {
+                enabled: document.getElementById('aiEnabled').checked,
+                api_url: document.getElementById('aiApiUrl').value.trim(),
+                model: document.getElementById('aiModel').value.trim(),
+                api_key: document.getElementById('aiApiKey').value.trim(),
+                ai_name: document.getElementById('aiName').value.trim(),
+                persona: document.getElementById('aiPersona').value,
+                trigger_mode: document.getElementById('aiTriggerMode').value,
+                context_count: parseInt(document.getElementById('aiContextCount').value) || 10
+            };
+            const statusEl = document.getElementById('aiStatus');
+            statusEl.textContent = '保存中...';
+            statusEl.style.color = 'var(--text-secondary)';
+            const response = await fetch('?action=save_ai_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+            const data = await response.json();
+            if (data.success) {
+                statusEl.textContent = '配置已保存（刷新页面后新昵称生效）';
+                statusEl.style.color = 'var(--neon-green)';
+                document.getElementById('aiApiKey').value = '';
+                loadAiConfig();
+            } else {
+                statusEl.textContent = data.error || '保存失败';
+                statusEl.style.color = 'var(--neon-magenta)';
+            }
+        }
+
+        async function testAi() {
+            const statusEl = document.getElementById('aiStatus');
+            statusEl.textContent = '正在调用 AI 接口（最长约30秒）...';
+            statusEl.style.color = 'var(--text-secondary)';
+            const response = await fetch('?action=test_ai', { method: 'POST' });
+            const data = await response.json();
+            if (data.success) {
+                statusEl.textContent = '连接成功！AI 回复：' + data.reply;
+                statusEl.style.color = 'var(--neon-green)';
+            } else {
+                statusEl.textContent = '失败：' + (data.error || '未知错误');
+                statusEl.style.color = 'var(--neon-magenta)';
+            }
+        }
 
         // ========== 敏感词过滤配置 ==========
         function toggleFilterSettings() { document.getElementById('filterSettingsPanel').classList.toggle('show'); }
