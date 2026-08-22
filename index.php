@@ -517,17 +517,13 @@ function generate_code() {
 if (isset($_GET['action'])) {
     header('Content-Type: application/json');
     
-    // 安全修复：私聊消息改为服务端过滤——非收发双方的客户端根本拿不到消息内容
+    // 安全修复：私聊功能已移除；历史遗留的带 target 私聊消息对所有人不可见，防止泄露
     if ($_GET['action'] === 'get_messages') {
-        $my_name = isset($_GET['name']) ? trim((string)$_GET['name']) : '';
-        $my_name = mb_substr($my_name, 0, 20);
         $all = get_messages();
         $messages = [];
         foreach ($all as $m) {
-            if (empty($m['target'])) { $messages[] = $m; continue; }
-            if ($my_name !== '' && ($m['target'] === $my_name || (isset($m['name']) && $m['name'] === $my_name))) {
-                $messages[] = $m;
-            }
+            if (!empty($m['target'])) continue;
+            $messages[] = $m;
         }
         echo json_encode($messages);
         exit;
@@ -712,11 +708,7 @@ if (isset($_GET['action'])) {
         // 敏感词过滤
         $content = filter_content($content);
 
-        // 检测私聊 @用户名
-        $target = '';
-        if (preg_match('/^@(\S+)\s/u', $content, $matches)) {
-            $target = $matches[1];
-        }
+        // 私聊功能已移除
 
         // 安全修复：互斥锁保护「读用户→写用户→算ID→写消息」整个流程，
         // 并发发送不再互相覆盖；ID 取 max(末尾+1, 当前时间戳)，
@@ -741,8 +733,7 @@ if (isset($_GET['action'])) {
                 'name' => $name,
                 'content' => $content,
                 'type' => $type,
-                'ip' => $ip,
-                'target' => $target
+                'ip' => $ip
             ];
             save_message($msg);
         } while (false);
@@ -948,18 +939,11 @@ if (isset($_GET['action'])) {
             echo json_encode([]);
             exit;
         }
-        // 安全修复：搜索结果同样要做私聊过滤，防止借搜索枚举他人私聊内容
-        $my_name = isset($_GET['name']) ? mb_substr(trim((string)$_GET['name']), 0, 20) : '';
+        // 安全修复：私聊功能已移除，历史遗留私聊消息对所有人不可见
         $all = get_messages();
         $results = [];
         foreach ($all as $msg) {
-            if (!empty($msg['target']) && $my_name !== '' &&
-                $msg['target'] !== $my_name && (isset($msg['name']) && $msg['name'] !== $my_name)) {
-                continue;
-            }
-            if (!empty($msg['target']) && $my_name === '') {
-                continue;
-            }
+            if (!empty($msg['target'])) continue;
             if (mb_stripos($msg['content'], $keyword) !== false || mb_stripos($msg['name'], $keyword) !== false) {
                 $results[] = $msg;
             }
@@ -2179,7 +2163,7 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                     <div id="typingIndicator" style="font-size:0.72em;color:var(--neon-cyan-dim);padding:0 32px 6px;min-height:18px;"></div>
 
                     <div class="input-row">
-                        <input type="text" id="messageInput" placeholder="输入消息... @用户名 可私聊" maxlength="500" onkeypress="if(event.key==='Enter')sendMessage()" oninput="onTyping()">
+                        <input type="text" id="messageInput" placeholder="输入消息..." maxlength="500" onkeypress="if(event.key==='Enter')sendMessage()" oninput="onTyping()">
                         <button class="btn-send" onclick="sendMessage()">发送</button>
                     </div>
                 </div>
@@ -2666,12 +2650,10 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                 const li = document.createElement('li');
                 const isOwn = msg.name === userName;
                 const isAdminMsg = msg.name === '管理员' || (msg.name && msg.name.includes('admin'));
-                const isPrivate = (msg.target && msg.target !== '') && (msg.target === userName || msg.name === userName);
                 const isRecalled = msg.type === 'recalled';
 
                 li.className = 'message-item';
                 if (isRecalled) li.className += ' recalled';
-                else if (isPrivate) li.className += ' private';
                 else if (isOwn) li.className += ' own';
                 if (isAdminMsg) li.className += ' admin';
 
@@ -2684,10 +2666,6 @@ $verified_email = isset($_SESSION['verified_email']) ? $_SESSION['verified_email
                     content = '<em>此消息已被撤回</em>';
                 } else {
                     content = escapeHtml(content).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
-                    // 高亮@提及
-                    if (msg.content && msg.content.indexOf('@') === 0) {
-                        content = '<span style="color:var(--neon-magenta);">' + content + '</span>';
-                    }
                 }
 
                 const time = new Date(msg.time * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
